@@ -1,0 +1,12 @@
+.DS_Store
+.env
+node_modules/
+rkh-assurance-data/
+data/
+coverage/
+*.log
+*.xlsx
+*.xls
+*.csv
+!tests/fixtures/*.csv
+!tests/fixtures/*.json

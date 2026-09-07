@@ -1,0 +1,87 @@
+{
+  "name": "RKH - MAXIMO Email Intake",
+  "nodes": [
+    {
+      "id": "email-intake-webhook-template",
+      "name": "Email Intake Webhook Template",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rkh-maximo-email-intake",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "notes": "Template trigger: replace with Microsoft Outlook Trigger or Email Trigger (IMAP) after credentials and sender/subject policy are approved. Input must contain binary data and subject/from JSON fields.",
+      "notesInFlow": true
+    },
+    {
+      "id": "validate-email-and-create-run",
+      "name": "Validate Email and Create Run",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst item = $input.first();\nif (!String(item.json.subject || '').toLowerCase().includes(String(process.env.RKH_EMAIL_SUBJECT_PATTERN || 'maximo').toLowerCase())) throw new Error('EMAIL_SUBJECT_NOT_ALLOWED');\nif (process.env.RKH_EMAIL_ALLOWED_SENDERS && !String(process.env.RKH_EMAIL_ALLOWED_SENDERS).toLowerCase().split(',').map(value => value.trim()).includes(String(item.json.from || '').toLowerCase())) throw new Error('EMAIL_SENDER_NOT_ALLOWED');\nconst binary = item.binary && item.binary.data;\nif (!binary || !binary.data) throw new Error('UPLOAD_BINARY_MISSING');\nconst filename = String(binary.fileName || item.json.body?.filename || 'upload').split(/[\\/]/).pop();\nconst extension = filename.toLowerCase().split('.').pop();\nif (!['csv', 'xlsx', 'xls'].includes(extension)) throw new Error('UNSUPPORTED_FILE_TYPE');\nconst maxBytes = Number(process.env.RKH_MAX_UPLOAD_BYTES || 25000000);\nconst sourceBuffer = Buffer.from(binary.data, 'base64');\nif (sourceBuffer.length > maxBytes) throw new Error('UPLOAD_TOO_LARGE');\nconst now = new Date();\nconst day = now.toISOString().slice(0, 10).replaceAll('-', '');\nconst stamp = day + '-' + now.toISOString().slice(11, 19).replaceAll(':', '');\nconst runId = 'RKH-' + day + '-' + stamp + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();\nconst dataRoot = process.env.RKH_ASSURANCE_DATA_DIR || path.join(process.cwd(), 'rkh-assurance-data');\nconst runDir = path.join(dataRoot, 'runs', runId);\nfs.mkdirSync(runDir, { recursive: true });\nconst sourcePath = path.join(runDir, filename.replace(/[^a-zA-Z0-9._-]/g, '_'));\nconst runPath = path.join(runDir, 'run.json');\nconst run = { run_id: runId, filename, source: 'EMAIL', created_at: now.toISOString(), updated_at: now.toISOString(), status: 'RECEIVED', total_rows: 0, eligible_count: 0, excluded_count: 0, green_count: 0, yellow_count: 0, amber_count: 0, red_count: 0, source_path: sourcePath, results_json_path: path.join(runDir, 'results.json'), results_csv_path: path.join(runDir, 'results.csv'), mapping_confidence: 0, rule_version: 'MAXIMO-MMS-KEYWORD-v1', error_code: '', error_message: '' };\nfs.writeFileSync(sourcePath, sourceBuffer);\nfs.writeFileSync(runPath, JSON.stringify(run, null, 2));\nreturn [{ json: { ...run, response: { run_id: runId, status: 'RECEIVED' } } }];"
+      }
+    },
+    {
+      "id": "start-maximo-mms-processor",
+      "name": "Start MAXIMO MMS Processor",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        780,
+        300
+      ],
+      "parameters": {
+        "workflowId": "REPLACE_WITH_MAXIMO_MMS_PROCESSOR_WORKFLOW_ID",
+        "mode": "onceForAllItems",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Email Intake Webhook Template": {
+      "main": [
+        [
+          {
+            "node": "Validate Email and Create Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Email and Create Run": {
+      "main": [
+        [
+          {
+            "node": "Start MAXIMO MMS Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "rkh-rkh-maximo-email-intake",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "tags": []
+}

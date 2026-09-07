@@ -1,0 +1,59 @@
+{
+  "name": "RKH - API - Get Results",
+  "nodes": [
+    {
+      "id": "get-results-webhook",
+      "name": "Get Results Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "rkh-api-get-results",
+        "responseMode": "lastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "read-persistent-assurance-data",
+      "name": "Read Persistent Assurance Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const fs = require('fs'); const path = require('path');\nconst runId = String($json.query?.run_id || $json.run_id || '').replace(/[^A-Za-z0-9_-]/g, ''); if (!runId) throw new Error('RUN_ID_REQUIRED');\nconst root = path.join(process.env.RKH_ASSURANCE_DATA_DIR || path.join(process.cwd(), 'rkh-assurance-data'), 'runs', runId, 'results.json'); if (!fs.existsSync(root)) throw new Error('RESULTS_NOT_FOUND');\nreturn [{ json: JSON.parse(fs.readFileSync(root, 'utf8')) }];"
+      },
+      "notes": "Reads only the configured persistent RKH_ASSURANCE_DATA_DIR. Never exposes raw filesystem paths to the browser.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Get Results Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read Persistent Assurance Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "rkh-rkh-api-get-results",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "tags": []
+}

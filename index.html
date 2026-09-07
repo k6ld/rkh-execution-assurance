@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="RKH MAXIMO/MMS Execution Assurance dashboard" />
+    <title>RKH Execution Assurance</title>
+    <link rel="stylesheet" href="frontend/app.css" />
+    <script src="frontend/config.js"></script>
+  </head>
+  <body>
+    <main class="page-shell" id="app">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow"><span>MAXIMO / MMS</span><span>Execution Assurance</span></div>
+          <h1>Execution Assurance</h1>
+          <p class="lede">Upload a MAXIMO/MMS report, follow its real processing state, and review the work orders that need assurance attention.</p>
+        </div>
+        <div class="population"><span>Reports available</span><strong id="report-count">0</strong></div>
+      </header>
+
+      <section class="upload-card" aria-labelledby="upload-heading">
+        <div class="section-heading"><div><h2 id="upload-heading">Upload MAXIMO / MMS report</h2><p>CSV or XLSX. The backend detects the worksheet, header row, and key columns.</p></div><button class="button primary" id="choose-file">Choose file</button><input id="file-input" type="file" accept=".csv,.xlsx,.xls" hidden /></div>
+        <div class="drop-zone" id="drop-zone" tabindex="0"><strong>Drop your CSV or XLSX here</strong><span>Release the file to start a report run.</span></div>
+        <div class="upload-error hidden" id="upload-error" role="alert"></div>
+        <div class="stepper" aria-label="Report processing progress">
+          <div class="step active" data-step="1"><b>1</b><span>Upload</span></div><i></i><div class="step" data-step="2"><b>2</b><span>Prepare</span></div><i></i><div class="step" data-step="3"><b>3</b><span>Analyze</span></div><i></i><div class="step" data-step="4"><b>4</b><span>Review</span></div>
+        </div>
+        <div class="progress-area hidden" id="progress-area"><div class="progress-head"><strong id="progress-title">Preparing your report</strong><span id="progress-status">Waiting</span></div><div class="progress-track"><div id="progress-bar"></div></div><p id="progress-message">Waiting for an upload.</p></div>
+      </section>
+
+      <section class="reports-section" id="reports-view">
+        <div class="section-heading"><div><h2>Recent reports</h2><p>Historical runs remain available after a browser refresh.</p></div><button class="button subtle" id="refresh-runs">Refresh</button></div>
+        <div class="connection-note" id="connection-note"></div>
+        <div class="report-list" id="report-list"><div class="empty-state">No reports have been loaded yet.</div></div>
+      </section>
+
+      <section class="report-detail hidden" id="detail-view" aria-live="polite">
+        <div class="detail-head"><div><button class="back-link" id="back-to-reports">← Back to reports</button><h2 id="detail-title">Report</h2><p id="detail-meta"></p></div><button class="button subtle" id="detail-export">Export results CSV</button></div>
+        <div class="summary-grid">
+          <button class="summary-card green" data-filter="Green"><span>No obvious discrepancies</span><strong id="count-green">0</strong><small>No action</small></button>
+          <button class="summary-card yellow" data-filter="Yellow"><span>Follow-up required</span><strong id="count-yellow">0</strong><small>Engineer / defect / overdue</small></button>
+          <button class="summary-card amber" data-filter="Amber"><span>Site verification</span><strong id="count-amber">0</strong><small>Assurance inspection</small></button>
+          <button class="summary-card red" data-filter="Red"><span>Serious discrepancy</span><strong id="count-red">0</strong><small>Engineer / CAR path</small></button>
+        </div>
+        <div class="filters"><input id="search" type="search" placeholder="Search work order, location, keyword..." aria-label="Search work orders" /><select id="type-filter"><option value="All">PM + CM</option><option value="PM">PM only</option><option value="CM">CM only</option></select><select id="grade-filter"><option value="All">All grades</option><option>Green</option><option>Yellow</option><option>Amber</option><option>Red</option><option>Excluded</option></select><button class="button subtle" id="reset-filters">Reset</button></div>
+        <div class="table-wrap"><table><thead><tr><th>Work order</th><th>Type</th><th>Status</th><th>Location</th><th>Issue</th><th>Grade</th><th>Action</th><th></th></tr></thead><tbody id="results-table"></tbody></table></div>
+        <div class="empty-state hidden" id="results-empty">No work orders match the current filters.</div>
+        <article class="wo-detail hidden" id="wo-detail"><div class="detail-head compact"><div><span class="eyebrow">Selected work order</span><h3 id="wo-title"></h3><p id="wo-meta"></p></div><button class="button subtle" id="close-wo">Close</button></div><div class="detail-grid"><div><label>Original problem</label><p id="wo-problem"></p></div><div><label>Worklog</label><p id="wo-worklog"></p></div><div><label>Matched rules</label><p id="wo-rules"></p></div><div><label>Keyword hits</label><p id="wo-keywords"></p></div><div><label>Required action</label><p id="wo-action"></p></div><div><label>Checks / warnings</label><p id="wo-checks"></p></div></div></article>
+      </section>
+    </main>
+    <script src="frontend/app.js"></script>
+  </body>
+</html>
