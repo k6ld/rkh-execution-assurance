@@ -11,23 +11,921 @@
         300
       ],
       "parameters": {},
-      "notes": "Receives run_id, source_path, results_json_path, results_csv_path, filename, and run metadata from the upload or email intake workflow.",
+      "notes": "Receives the Run ID, source base64, filename, and run metadata from the upload or email intake workflow.",
       "notesInFlow": true
     },
     {
-      "id": "analyze-and-persist-results",
-      "name": "Analyze and Persist Results",
+      "id": "mark-preparing",
+      "name": "Mark Preparing",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        540,
+        500,
         300
       ],
       "parameters": {
-        "jsCode": "/*\n * RKH Execution Assurance deterministic engine.\n *\n * This file is the only business-rule source of truth. The n8n workflow JSON\n * is generated from this file by scripts/build-n8n-workflows.js.\n */\nconst RKH_ASSURANCE_ENGINE = (() => {\n  const RULE_VERSION = 'MAXIMO-MMS-KEYWORD-v1';\n  const ELIGIBLE_STATUSES = ['COMP', 'COMPLETED', 'REVIEWED', 'CLOSED', 'CLOSE', 'COMPLETE'];\n  const SEVERITY = { Excluded: -1, Green: 0, Yellow: 1, Amber: 2, Red: 3 };\n\n  const POLICY = {\n    pmOverdue: { grade: 'Amber', status: 'OPEN' },\n    pmScope: { grade: 'Red', status: 'OPEN' },\n    pmDefectWithReference: { grade: 'Green', status: 'OPEN' },\n    cmGenericDefect: { grade: 'Yellow', status: 'OPEN' },\n    cmUnspecified: { grade: 'Amber', status: 'OPEN' },\n    cmRelationshipUnknown: { grade: 'Amber', status: 'OPEN' },\n    cmInsufficientEvidence: { grade: 'Amber', status: 'OPEN' },\n    missingWorklog: { grade: 'Red', status: 'OPEN' },\n    unknownType: { grade: 'Amber', status: 'OPEN' },\n    negation: { status: 'PROVISIONAL' },\n  };\n\n  const FIELD_ALIASES = {\n    wo_number: ['work order number', 'work order', 'wo number', 'wonum', 'workorder', 'work order no', 'wo no', 'wo'],\n    work_type: ['work type', 'wo type', 'work order type', 'type', 'worktype', 'maintenance type'],\n    status: ['status', 'wo status', 'work order status'],\n    location: ['location', 'location code', 'station', 'site', 'locations', 'functional location'],\n    actual_finish: ['actual finish date', 'actual finish', 'actfinish', 'actual completion date', 'completion date', 'actual finish datetime'],\n    finish_no_later_than: ['finish no later than', 'finish no later than date', 'fnlt', 'due date', 'target finish', 'finish nlt', 'finish no later'],\n    tanc_reference: ['tanc', 'tanc number', 'tanc no', 'tanc ref', 'tanc reference'],\n    defect_reference: ['defect reference', 'defect ref', 'defect number', 'defect no', 'follow up', 'follow-up', 'follow up reference', 'linked wo', 'related wo', 'defect id'],\n    original_problem: ['original problem', 'fault description', 'problem', 'description', 'short description', 'reported fault', 'issue description', 'work order description'],\n    worklog: ['closure log', 'work log', 'worklog', 'completion notes', 'actual work', 'work log details', 'wo log', 'completion log', 'long description', 'worklog details', 'comments'],\n    contractor: ['contractor', 'vendor', 'company', 'responsible contractor', 'maintenance performer', 'supplier'],\n    relationship_confirmed_mismatch: ['relationship mismatch confirmed', 'confirmed mismatch', 'worklog unrelated confirmed'],\n  };\n\n  const RULES = {\n    pm: {\n      incomplete: { id: 'PM-R04', phrases: ['incomplete'], grade: 'Amber', category: 'PM closed but work incomplete', action: 'Site verification / Assurance inspection required', reason_code: 'PM_INCOMPLETE', status: 'LOCKED' },\n      partial: { id: 'PM-R05', phrases: ['partially completed'], grade: 'Amber', category: 'PM closed but work incomplete', action: 'Site verification / Assurance inspection required', reason_code: 'PM_PARTIAL', status: 'LOCKED' },\n      ongoing: { id: 'PM-R06', phrases: ['on going activity', 'ongoing activity'], grade: 'Amber', category: 'PM closed but work incomplete', action: 'Site verification / Assurance inspection required', reason_code: 'PM_ONGOING', status: 'LOCKED' },\n      asset_not_found: { id: 'PM-R07', phrases: ['asset not found'], grade: 'Amber', category: 'PM not performed but WO was closed', action: 'Site verification required', reason_code: 'PM_ASSET_NOT_FOUND', status: 'LOCKED' },\n      scope: { id: 'PM-R08/R09', phrases: ['not in our scope', 'out of scope'], grade: 'Red', category: 'PM closed but work not done', action: 'Engineer notified and CAR raised', reason_code: 'PM_SCOPE_EXCEPTION', status: 'OPEN' },\n      not_found: { id: 'PM-R10', phrases: ['not found'], grade: 'Red', category: 'PM closed but work not done', action: 'Engineer notified and CAR raised', reason_code: 'PM_NOT_FOUND', status: 'LOCKED' },\n      defect: { id: 'PM-R11/R12', phrases: ['defect'], grade: 'Red', category: 'PM not performed but WO was closed', action: 'Engineer notified and CAR raised', reason_code: 'PM_DEFECT_NO_REFERENCE', status: 'LOCKED' },\n      not_done: { id: 'PM-R13', phrases: ['not done'], grade: 'Red', category: 'PM closed but work not done', action: 'Engineer notified and CAR raised', reason_code: 'PM_NOT_DONE', status: 'LOCKED' },\n    },\n    cm: {\n      weak: { id: 'CM-R03', phrases: ['attended', 'cm attended', 'checked', 'observed', 'inspected', 'booked in', 'closed', 'cm closed', 'na', 'n/a', 'sign off notes'], grade: 'Amber', category: 'Discrepancies found and can be verified on site', action: 'Assurance team verifies on site and reports to engineer', reason_code: 'CM_WEAK_SHORT', status: 'LOCKED' },\n      pending: { id: 'CM-R04', phrases: ['pending', 'on hold', 'waiting', 'awaiting', 'under process', 'under observation', 'monitoring', 'to be completed', 'to be rectified', 'will be', 'need to', 'needs to', 'required to', 'further rectification', 'further action', 'forwarded', 'forward to', 'passed to', 'assigned to'], grade: 'Amber', category: 'Discrepancies found and can be verified on site', action: 'Engineers notified and Assurance Team perform site verification', reason_code: 'CM_PENDING_FUTURE', status: 'LOCKED' },\n      no_fault: { id: 'CM-R05', phrases: ['no fault found', 'no issue found', 'working normal', 'no abnormality', 'no failure', 'normal operation'], grade: 'Amber', category: 'Discrepancies found and can be verified on site', action: 'Engineers notified and Assurance Team perform site verification', reason_code: 'CM_NO_FAULT', status: 'LOCKED' },\n      temporary: { id: 'CM-R06', phrases: ['temporary', 'area barricaded', 'barricaded', 'isolated', 'signage placed', 'out of service'], grade: 'Amber', category: 'Discrepancies found and can be verified on site', action: 'Engineers notified and Assurance Team perform site verification', reason_code: 'CM_TEMPORARY', status: 'LOCKED' },\n      material: { id: 'CM-R07', phrases: ['material required', 'waiting material', 'waiting for material', 'pending material', 'spare required', 'quotation required', 'parts not available'], grade: 'Amber', category: 'Discrepancies found and can be verified on site', action: 'Engineers notified and Assurance Team perform site verification', reason_code: 'CM_MATERIAL', status: 'LOCKED' },\n      leakage: { id: 'CM-R08', phrases: ['water leakage', 'water dripping', 'structural leakage', 'water proofing', 'waterproofing', 'ceiling stain', 'seepage', 'grp leakage'], grade: 'Yellow', category: 'Defect related CM', action: 'Engineers notified; engineer verifies defect process', reason_code: 'CM_DEFECT_LEAKAGE', status: 'LOCKED' },\n      generic_defect: { id: 'CM-R09', phrases: ['defect', 's200', 'under defect', 'com-ltr'], grade: 'Yellow', category: 'Defect related CM', action: 'Engineers notified; engineer verifies defect process', reason_code: 'CM_DEFECT_GENERIC', status: 'OPEN' },\n      no_access: { id: 'CM-R10', phrases: ['no access', 'unable to access', 'unale to access', 'in accessible', 'inaccessible', 'mewp required', 'scaffolding required', 'height access required', 'unable to complete'], grade: 'Red', category: 'WO was closed without sufficient rectification', action: 'Engineer reviews WO and raises CAR if necessary', reason_code: 'CM_NO_ACCESS', status: 'LOCKED' },\n      unspecified: { id: 'CM-R11', phrases: ['duplicate', 'cancelled', 'canceled', 'out of scope', 'not in scope'], grade: 'Amber', category: 'Manual review - CM disposition not specified', action: 'Human assurance review required', reason_code: 'CM_UNSPECIFIED', status: 'OPEN' },\n    },\n  };\n\n  const RECTIFICATION = ['repaired', 'replaced', 'rectified', 'fixed', 'renewed', 'changed', 'installed', 'reset', 'adjusted', 'tightened', 'cleaned', 'calibrated', 'commissioned', 'corrected'];\n  const VERIFICATION = ['tested', 'functional test', 'function test', 'operational test', 'verified', 'restored', 'returned to service', 'back in service', 'resolved', 'normal operation', 'operational'];\n\n  function text(value) { return String(value == null ? '' : value).trim(); }\n  function normalizeHeader(value) { return text(value).toLowerCase().normalize('NFKD').replace(/[\\u0300-\\u036f]/g, '').replace(/[_-]+/g, ' ').replace(/\\s+/g, ' '); }\n  function normalizeMatch(value) { return text(value).toLowerCase().normalize('NFKD').replace(/[\\u0300-\\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').replace(/\\s+/g, ' ').trim(); }\n  function unique(values) { return [...new Set((values || []).filter(Boolean))]; }\n  function severity(grade) { return SEVERITY[grade] == null ? 0 : SEVERITY[grade]; }\n  function meaningfulReference(value) { return !['', 'n/a', 'na', 'none', 'null', '-', '0', 'not found'].includes(normalizeMatch(value)); }\n  function words(value) { return normalizeMatch(value).split(' ').filter(Boolean); }\n  function containsSequence(sourceTokens, patternTokens) {\n    if (!patternTokens.length || patternTokens.length > sourceTokens.length) return [];\n    const starts = [];\n    for (let i = 0; i <= sourceTokens.length - patternTokens.length; i += 1) {\n      if (patternTokens.every((token, offset) => sourceTokens[i + offset] === token)) starts.push(i);\n    }\n    return starts;\n  }\n  function isNegated(sourceTokens, start) {\n    return ['not', 'no', 'without'].includes(sourceTokens[start - 1]) || ['not', 'no', 'without'].includes(sourceTokens[start - 2]);\n  }\n  function matches(textValue, phrases) {\n    const source = words(textValue);\n    const hitList = [];\n    for (const phrase of phrases) {\n      const pattern = words(phrase);\n      for (const start of containsSequence(source, pattern)) {\n        if (!isNegated(source, start)) hitList.push({ phrase, start, end: start + pattern.length - 1 });\n      }\n    }\n    return hitList;\n  }\n  function hitPhrases(textValue, phrases) { return unique(matches(textValue, phrases).map(hit => hit.phrase)); }\n\n  function parseDate(value) {\n    const raw = text(value);\n    if (!raw) return null;\n    if (/^\\d{5}(\\.\\d+)?$/.test(raw)) {\n      const date = new Date((Number(raw) - 25569) * 86400000);\n      return Number.isNaN(date.getTime()) ? null : new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));\n    }\n    let match = raw.match(/^(\\d{4})[-/](\\d{1,2})[-/](\\d{1,2})/);\n    if (match) return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));\n    match = raw.match(/^(\\d{1,2})[-/](\\d{1,2})[-/](\\d{4})/);\n    if (match) return new Date(Date.UTC(Number(match[3]), Number(match[2]) - 1, Number(match[1])));\n    const date = new Date(raw);\n    return Number.isNaN(date.getTime()) ? null : new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));\n  }\n  function dateLabel(date) { return date ? `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}` : ''; }\n\n  function scoreHeader(row) {\n    const cells = row.map(normalizeHeader).filter(Boolean);\n    return Object.values(FIELD_ALIASES).reduce((score, aliases) => score + (aliases.some(alias => cells.some(cell => cell === normalizeHeader(alias) || cell.includes(normalizeHeader(alias)) || normalizeHeader(alias).includes(cell))) ? 1 : 0), 0);\n  }\n  function detectHeader(matrix, maxRows = 25) {\n    let best = { index: -1, score: -1 };\n    matrix.slice(0, maxRows).forEach((row, index) => {\n      const score = scoreHeader(row);\n      if (score > best.score) best = { index, score };\n    });\n    return best;\n  }\n  function matrixToRows(matrix, headerIndex) {\n    if (headerIndex < 0 || !matrix[headerIndex]) return { headers: [], rows: [] };\n    const headers = matrix[headerIndex].map((header, index) => text(header) || `Column ${index + 1}`);\n    const rows = matrix.slice(headerIndex + 1).filter(row => row.some(value => text(value) !== '')).map(row => Object.fromEntries(headers.map((header, index) => [header, row[index] == null ? '' : row[index]])));\n    return { headers, rows };\n  }\n  function mapHeaders(headers) {\n    const normalized = headers.map(header => ({ header, value: normalizeHeader(header) }));\n    const mapping = {};\n    for (const [field, aliases] of Object.entries(FIELD_ALIASES)) {\n      let found = normalized.find(item => aliases.some(alias => item.value === normalizeHeader(alias)));\n      if (!found) found = normalized.find(item => aliases.some(alias => item.value && (item.value.includes(normalizeHeader(alias)) || normalizeHeader(alias).includes(item.value))));\n      mapping[field] = found ? found.header : '';\n    }\n    return mapping;\n  }\n  function mappingConfidence(mapping) {\n    const weights = { wo_number: 3, worklog: 3, work_type: 2, status: 1, location: 1, actual_finish: 1, finish_no_later_than: 1, tanc_reference: 0.5, defect_reference: 0.5, original_problem: 1, contractor: 0.5 };\n    let present = 0; let total = 0;\n    Object.entries(weights).forEach(([field, weight]) => { total += weight; if (mapping[field]) present += weight; });\n    return Math.round((present / total) * 100);\n  }\n\n  function valueFor(row, mapping, field) { return mapping[field] ? row[mapping[field]] : ''; }\n  function inferType(row, mapping, defaultType = '') {\n    const mapped = text(valueFor(row, mapping, 'work_type')).toUpperCase();\n    if (mapped.includes('PM') || mapped.includes('PREVENT')) return 'PM';\n    if (mapped.includes('CM') || mapped.includes('CORRECT')) return 'CM';\n    const wo = text(valueFor(row, mapping, 'wo_number')).toUpperCase();\n    if (/^PM(?:[\\s_-]|$)/.test(wo)) return 'PM';\n    if (/^CM(?:[\\s_-]|$)/.test(wo)) return 'CM';\n    return defaultType || 'UNKNOWN';\n  }\n  function relationCheck(problem, worklog, confirmedMismatch = false) {\n    if (confirmedMismatch) return { state: 'Description and worklog confirmed unrelated', shared: [] };\n    const stop = new Set(['the', 'and', 'for', 'with', 'from', 'was', 'were', 'are', 'is', 'to', 'of', 'in', 'on', 'at', 'a', 'an', 'this', 'that', 'wo', 'work', 'order', 'cm', 'pm', 'system', 'equipment', 'found', 'reported', 'issue']);\n    const problemTokens = unique(words(problem).filter(word => word.length > 2 && !stop.has(word)));\n    const logTokens = new Set(words(worklog).filter(word => word.length > 2 && !stop.has(word)));\n    const shared = problemTokens.filter(word => logTokens.has(word));\n    if (problemTokens.length < 2 || logTokens.size < 2) return { state: 'Not enough text for deterministic relation check', shared };\n    return shared.length ? { state: 'Description and worklog share some terms', shared } : { state: 'No clear lexical overlap - manual relationship review required', shared: [] };\n  }\n\n  function candidate(rule, hits, overrides = {}) {\n    return { rule_id: rule.id, grade: overrides.grade || rule.grade, category: overrides.category || rule.category, action: overrides.action || rule.action, reason_code: overrides.reason_code || rule.reason_code, keyword_hits: hits, policy_status: overrides.policy_status || rule.status, reasons: overrides.reasons || [] };\n  }\n  function chooseCandidates(base, candidates) {\n    const all = [base, ...candidates].filter(Boolean);\n    const best = all.reduce((current, next) => {\n      if (severity(next.grade) > severity(current.grade)) return next;\n      if (severity(next.grade) === severity(current.grade) && current.reason_code === 'CM_RELATIONSHIP_REVIEW' && next.reason_code !== 'CM_RELATIONSHIP_REVIEW') return next;\n      return current;\n    });\n    const triggered = all.filter(item => item !== base);\n    const policyStatuses = unique(triggered.map(item => item.policy_status));\n    const multiple = new Set(triggered.map(item => item.grade)).size > 1;\n    return {\n      ...best,\n      keyword_hits: unique(triggered.flatMap(item => item.keyword_hits || [])),\n      matched_rule_ids: unique(triggered.map(item => item.rule_id)),\n      policy_statuses: policyStatuses,\n      policy_status: policyStatuses.includes('OPEN') ? 'OPEN' : (policyStatuses.includes('PROVISIONAL') ? 'PROVISIONAL' : 'LOCKED'),\n      reason_code: multiple ? `MULTI_HIT_${best.grade.toUpperCase()}_WINS` : best.reason_code,\n      reasons: unique(triggered.flatMap(item => item.reasons || []).concat(best.reasons || [])),\n    };\n  }\n\n  function analyzePM(row) {\n    const log = text(row.worklog);\n    const candidates = [];\n    const finish = parseDate(row.actual_finish); const due = parseDate(row.finish_no_later_than);\n    if (finish && due && finish > due) {\n      candidates.push({ rule_id: 'PM-R03', grade: POLICY.pmOverdue.grade, category: 'PM overdue', action: meaningfulReference(row.tanc_reference) ? 'TANC reference found - no further action required' : 'Engineer review - TANC not found', reason_code: 'PM_OVERDUE', keyword_hits: ['PM overdue'], policy_status: POLICY.pmOverdue.status, reasons: [`Actual Finish (${dateLabel(finish)}) is later than Finish No Later Than (${dateLabel(due)})`, meaningfulReference(row.tanc_reference) ? 'TANC reference is present' : 'TANC reference is missing'] });\n    }\n    const assetHits = hitPhrases(log, RULES.pm.asset_not_found.phrases);\n    if (assetHits.length) candidates.push(candidate(RULES.pm.asset_not_found, assetHits, { reason_code: normalizeMatch(row.original_problem).includes('scheduled asset') ? 'PM_ASSET_NOT_FOUND' : 'SPECIFIC_PHRASE_PRECEDENCE', reasons: ['Specific PM step matched: Asset Not Found before generic not found'] }));\n    for (const key of ['incomplete', 'partial', 'ongoing']) { const rule = RULES.pm[key]; const hits = hitPhrases(log, rule.phrases); if (hits.length) candidates.push(candidate(rule, hits, { reasons: ['PM keyword matrix indicates incomplete / ongoing work'] })); }\n    const scopeHits = hitPhrases(log, RULES.pm.scope.phrases);\n    if (scopeHits.length) candidates.push(candidate(RULES.pm.scope, scopeHits, { reasons: ['PM keyword matrix matched a work-not-done / scope exception'] }));\n    const notFoundHits = assetHits.length ? [] : hitPhrases(log, RULES.pm.not_found.phrases);\n    if (notFoundHits.length) candidates.push(candidate(RULES.pm.not_found, notFoundHits, { reasons: ['Generic \"not found\" keyword matched the PM keyword table'] }));\n    const defectHits = hitPhrases(log, RULES.pm.defect.phrases);\n    if (defectHits.length) {\n      if (meaningfulReference(row.defect_reference)) candidates.push({ rule_id: 'PM-R12', grade: POLICY.pmDefectWithReference.grade, category: 'Defect documented', action: 'Defect reference found - no further action required', reason_code: 'PM_DEFECT_WITH_REFERENCE', keyword_hits: defectHits, policy_status: POLICY.pmDefectWithReference.status, reasons: ['Defect keyword detected', 'Defect / follow-up reference is present'] });\n      else candidates.push(candidate(RULES.pm.defect, defectHits, { reasons: ['Defect keyword detected', 'Defect reference not found'] }));\n    }\n    const notDoneHits = hitPhrases(log, RULES.pm.not_done.phrases);\n    if (notDoneHits.length) candidates.push(candidate(RULES.pm.not_done, notDoneHits, { reasons: ['PM keyword matrix matched a work-not-done / scope exception'] }));\n    if (!candidates.length) return { grade: 'Green', category: 'No obvious discrepancies', action: 'No action', reason_code: finish && due && finish <= due ? (finish.getTime() === due.getTime() ? 'PM_ON_TIME' : 'PM_EARLY') : 'PM_NO_OBVIOUS_DISCREPANCY', keyword_hits: [], matched_rule_ids: ['PM-R01/PM-R02/PM-R14'], policy_status: 'LOCKED', policy_statuses: ['LOCKED'], reasons: ['No PM exception keyword was triggered'], warnings: [] };\n    const result = chooseCandidates({ grade: 'Green', category: 'No obvious discrepancies', action: 'No action', reason_code: 'PM_NO_OBVIOUS_DISCREPANCY', keyword_hits: [], matched_rule_ids: [], policy_status: 'LOCKED', policy_statuses: ['LOCKED'], reasons: [] }, candidates);\n    return { ...result, reason_code: result.reason_code.startsWith('MULTI_HIT_') ? `PM_${result.reason_code}` : result.reason_code, warnings: [] };\n  }\n\n  function analyzeCM(row) {\n    const log = text(row.worklog); const candidates = [];\n    const rectification = hitPhrases(log, RECTIFICATION); const verification = hitPhrases(log, VERIFICATION);\n    const weakHits = hitPhrases(log, RULES.cm.weak.phrases); const wordCount = words(log).length;\n    const initialRelation = relationCheck(row.original_problem, log, row.relationship_confirmed_mismatch === true || text(row.relationship_confirmed_mismatch).toLowerCase() === 'true');\n    const relation = initialRelation.state.startsWith('No clear') && weakHits.length && wordCount <= 12 && !verification.length\n      ? { state: 'Short closure requires the weak-closure rule; relationship is not inferred', shared: initialRelation.shared }\n      : initialRelation;\n    if (relation.state === 'Description and worklog confirmed unrelated') return { grade: 'Red', category: 'Worklog unrelated to reported fault', action: 'Engineers notified and CAR raised for subcontractor justification/action', reason_code: 'CM_RELATIONSHIP_MISMATCH_CONFIRMED', keyword_hits: [], matched_rule_ids: ['CM-R02'], policy_status: 'LOCKED', policy_statuses: ['LOCKED'], reasons: ['CM procedure requires the worklog to relate to the original fault', 'Mismatch was explicitly confirmed'], warnings: [], relation };\n    else if (relation.state.startsWith('No clear lexical overlap')) { /* evaluated after concrete keyword rules */ }\n    for (const key of ['no_access', 'leakage', 'generic_defect', 'no_fault', 'temporary', 'material', 'unspecified', 'pending']) {\n      const rule = RULES.cm[key]; let hits = hitPhrases(log, rule.phrases);\n      if (key === 'no_fault' && rectification.length && verification.length) hits = hits.filter(hit => hit !== 'normal operation');\n      if (hits.length) candidates.push(candidate(rule, hits, { reason_code: key === 'no_access' && hits.includes('unable to complete') ? 'CM_UNABLE_COMPLETE' : key === 'pending' && hits.some(hit => ['forwarded', 'forward to'].includes(hit)) ? 'CM_FORWARDED' : key === 'leakage' && hits.some(hit => ['seepage', 'waterproofing', 'water proofing'].includes(hit)) ? 'CM_DEFECT_SEEPAGE' : undefined, reasons: [key === 'no_access' ? 'No-access / unable-to-complete keyword matched the CM validation table' : `${key.replace('_', ' ')} keyword matched the CM validation table`] }));\n    }\n    if (weakHits.length && wordCount <= 12 && !candidates.length && !(initialRelation.state.startsWith('No clear') && verification.length)) candidates.push(candidate(RULES.cm.weak, weakHits, { reasons: [`Worklog is short (${wordCount} words) and contains weak closure language`] }));\n    if (!candidates.length && relation.state.startsWith('No clear lexical overlap')) return { grade: POLICY.cmRelationshipUnknown.grade, category: 'Relationship not deterministically established', action: 'Manual relationship review required before treating the CM as Green', reason_code: 'CM_RELATIONSHIP_REVIEW', keyword_hits: [], matched_rule_ids: ['CM-R02'], policy_status: POLICY.cmRelationshipUnknown.status, policy_statuses: [POLICY.cmRelationshipUnknown.status], reasons: ['CM procedure requires the worklog to relate to the original fault', 'No clear lexical overlap was detected; lexical non-overlap alone does not prove a mismatch'], warnings: ['Lexical non-overlap alone does not prove a semantic mismatch'], relation };\n    if (!candidates.length && rectification.length && verification.length) return { grade: 'Green', category: 'The CM was performed and no obvious discrepancies found', action: 'No action', reason_code: words(log).includes('final') && !weakHits.includes('na') ? 'BOUNDARY_NA_FALSE_POSITIVE' : 'CM_NO_OBVIOUS_DISCREPANCY', keyword_hits: unique([...rectification, ...verification]), matched_rule_ids: ['CM-R01'], policy_status: 'LOCKED', policy_statuses: ['LOCKED'], reasons: ['Concrete rectification evidence detected', 'Testing / restoration evidence detected'], warnings: [], relation };\n    if (!candidates.length) return { grade: POLICY.cmInsufficientEvidence.grade, category: 'Insufficient evidence fault fully resolved', action: 'Assurance verification required before treating the CM as fully rectified', reason_code: 'CM_INSUFFICIENT_EVIDENCE', keyword_hits: unique([...rectification, ...verification]), matched_rule_ids: ['CM-R12'], policy_status: POLICY.cmInsufficientEvidence.status, policy_statuses: [POLICY.cmInsufficientEvidence.status], reasons: ['No listed discrepancy keyword was found, but the worklog lacks both concrete rectification and testing/restoration evidence'], warnings: ['Conservative guardrail prevents a false Green classification'], relation };\n    const result = chooseCandidates({ grade: 'Green', category: 'The CM was performed and no obvious discrepancies found', action: 'No action', reason_code: 'CM_NO_OBVIOUS_DISCREPANCY', keyword_hits: [], matched_rule_ids: [], policy_status: 'LOCKED', policy_statuses: ['LOCKED'], reasons: [] }, candidates);\n    return { ...result, reason_code: result.reason_code.startsWith('MULTI_HIT_') ? `CM_${result.reason_code}` : result.reason_code, warnings: relation.state.startsWith('No clear') ? ['Manual relationship review is required before treating this CM as fully resolved'] : [], relation };\n  }\n\n  function canonicalize(raw, index, mapping, defaultType = '') {\n    return {\n      row_number: index + 1,\n      wo_number: text(valueFor(raw, mapping, 'wo_number')) || `ROW-${index + 1}`,\n      work_type: inferType(raw, mapping, defaultType),\n      status: text(valueFor(raw, mapping, 'status')).toUpperCase(),\n      location: text(valueFor(raw, mapping, 'location')),\n      actual_finish: text(valueFor(raw, mapping, 'actual_finish')),\n      finish_no_later_than: text(valueFor(raw, mapping, 'finish_no_later_than')),\n      tanc_reference: text(valueFor(raw, mapping, 'tanc_reference')),\n      defect_reference: text(valueFor(raw, mapping, 'defect_reference')),\n      original_problem: text(valueFor(raw, mapping, 'original_problem')),\n      worklog: text(valueFor(raw, mapping, 'worklog')),\n      contractor: text(valueFor(raw, mapping, 'contractor')),\n      relationship_confirmed_mismatch: valueFor(raw, mapping, 'relationship_confirmed_mismatch'),\n    };\n  }\n  function analyzeRow(raw, index, mapping, options = {}) {\n    const row = canonicalize(raw, index, mapping, options.defaultType || '');\n    if (row.status && !ELIGIBLE_STATUSES.includes(row.status)) return { ...row, grade: 'Excluded', category: 'Outside validation population', action: 'No assurance grade assigned', reason_code: 'STATUS_NOT_ELIGIBLE', keyword_hits: [], matched_rule_ids: ['SYS-R01'], policy_status: 'PROVISIONAL', policy_statuses: ['PROVISIONAL'], reasons: [`Status \"${row.status}\" is not in the provisional eligible status set`], warnings: [], manual_review: false };\n    if (row.work_type === 'UNKNOWN') return { ...row, grade: POLICY.unknownType.grade, category: 'Unknown PM/CM type', action: 'Inspect automatic mapping or quarantine before business grading', reason_code: 'UNKNOWN_WORK_TYPE', keyword_hits: [], matched_rule_ids: ['OD-09'], policy_status: POLICY.unknownType.status, policy_statuses: [POLICY.unknownType.status], reasons: ['PM/CM-specific rules cannot run without a work type'], warnings: ['Work type was not confidently detected'], manual_review: true };\n    if (!row.worklog) return { ...row, grade: POLICY.missingWorklog.grade, category: 'Insufficient closure evidence', action: 'Human review required', reason_code: 'MISSING_WORKLOG', keyword_hits: [], matched_rule_ids: ['OD-08'], policy_status: POLICY.missingWorklog.status, policy_statuses: [POLICY.missingWorklog.status], reasons: ['No worklog text was available'], warnings: ['Missing worklog is an open policy default'], manual_review: true };\n    const analysis = row.work_type === 'PM' ? analyzePM(row) : analyzeCM(row);\n    return { ...row, ...analysis, manual_review: analysis.policy_statuses.includes('OPEN') || analysis.warnings.length > 0 || analysis.reason_code === 'CM_RELATIONSHIP_REVIEW' };\n  }\n\n  function analyzeRows(rawRows, options = {}) {\n    const rows = Array.isArray(rawRows) ? rawRows : [];\n    const headers = options.headers && options.headers.length ? options.headers : Object.keys(rows[0] || {});\n    const mapping = options.mapping || mapHeaders(headers);\n    const mapping_confidence = mappingConfidence(mapping);\n    const mapping_errors = [];\n    if (!mapping.wo_number) mapping_errors.push('Work Order Number');\n    if (!mapping.worklog) mapping_errors.push('Closure Log / Worklog');\n    if (mapping_errors.length) return { ok: false, error_code: 'CORE_MAPPING_FAILURE', error_message: `Required columns were not confidently identified: ${mapping_errors.join(', ')}`, mapping, mapping_confidence, rows: [], counts: { total: rows.length, eligible: 0, excluded: 0, green: 0, yellow: 0, amber: 0, red: 0 } };\n    const results = rows.map((row, index) => ({ ...analyzeRow(row, index, mapping, options), rule_version: RULE_VERSION, mapping_confidence }));\n    const counts = { total: results.length, eligible: results.filter(row => row.grade !== 'Excluded').length, excluded: results.filter(row => row.grade === 'Excluded').length, green: results.filter(row => row.grade === 'Green').length, yellow: results.filter(row => row.grade === 'Yellow').length, amber: results.filter(row => row.grade === 'Amber').length, red: results.filter(row => row.grade === 'Red').length };\n    return { ok: true, rule_version: RULE_VERSION, mapping, mapping_confidence, rows: results, counts };\n  }\n\n  function analyzeMatrix(matrix, options = {}) {\n    const header = detectHeader(matrix);\n    if (header.index < 0 || header.score < 2) return { ok: false, error_code: 'HEADER_NOT_DETECTED', error_message: 'Could not confidently detect a MAXIMO/MMS header row', mapping_confidence: 0, rows: [], counts: { total: 0, eligible: 0, excluded: 0, green: 0, yellow: 0, amber: 0, red: 0 } };\n    const converted = matrixToRows(matrix, header.index);\n    return { ...analyzeRows(converted.rows, { ...options, headers: converted.headers }), detected_header_row: header.index + 1, detected_header_score: header.score };\n  }\n\n  return { RULE_VERSION, POLICY, FIELD_ALIASES, RULES, ELIGIBLE_STATUSES, normalizeMatch, detectHeader, matrixToRows, mapHeaders, mappingConfidence, parseDate, meaningfulReference, analyzeRow, analyzeRows, analyzeMatrix };\n})();\n\nconst fs = require('fs');\nconst path = require('path');\nconst XLSX = require('xlsx');\nconst input = $input.first().json;\nconst runPath = path.join(path.dirname(input.source_path), 'run.json');\nfunction snapshot(status, extra = {}) {\n  const run = { ...input, ...extra, status, updated_at: new Date().toISOString() };\n  fs.writeFileSync(runPath, JSON.stringify(run, null, 2));\n  return run;\n}\nfunction parseCsv(value) {\n  const matrix = []; let row = []; let field = ''; let quoted = false;\n  for (let i = 0; i < value.length; i += 1) {\n    const c = value[i]; const n = value[i + 1];\n    if (c === '\"') { if (quoted && n === '\"') { field += '\"'; i += 1; } else quoted = !quoted; }\n    else if (c === ',' && !quoted) { row.push(field); field = ''; }\n    else if ((c === '\\n' || c === '\\r') && !quoted) { if (c === '\\r' && n === '\\n') i += 1; row.push(field); matrix.push(row); row = []; field = ''; }\n    else field += c;\n  }\n  if (field.length || row.length) { row.push(field); matrix.push(row); }\n  return matrix;\n}\ntry {\n  snapshot('PREPARING');\n  const buffer = fs.readFileSync(input.source_path);\n  const extension = input.filename.toLowerCase().split('.').pop();\n  const matrices = extension === 'csv' ? [{ name: 'CSV', matrix: parseCsv(buffer.toString('utf8').replace(/^\\uFEFF/, '')) }] : (() => {\n    const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true, raw: false });\n    return workbook.SheetNames.map(name => ({ name, matrix: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '', raw: false, dateNF: 'yyyy-mm-dd' }) }));\n  })();\n  snapshot('ANALYZING');\n  const analyses = matrices.map(candidate => ({ ...candidate, analysis: RKH_ASSURANCE_ENGINE.analyzeMatrix(candidate.matrix) })).filter(candidate => candidate.analysis && candidate.analysis.ok);\n  if (!analyses.length) throw new Error('HEADER_OR_CORE_MAPPING_FAILURE');\n  analyses.sort((a, b) => (b.analysis.detected_header_score || 0) - (a.analysis.detected_header_score || 0) || b.analysis.rows.length - a.analysis.rows.length);\n  const selected = analyses[0]; const analysis = selected.analysis;\n  const csvFields = ['wo_number', 'work_type', 'status', 'location', 'grade', 'category', 'action', 'reason_code', 'keyword_hits', 'matched_rule_ids', 'policy_status', 'reasons', 'warnings', 'original_problem', 'worklog'];\n  const quote = value => '\"' + String(Array.isArray(value) ? value.join(' | ') : value ?? '').replaceAll('\"', '\"\"') + '\"';\n  const csv = [csvFields.join(',')].concat(analysis.rows.map(row => csvFields.map(field => quote(row[field])).join(','))).join('\\r\\n');\n  const summary = { ...input, status: 'COMPLETED', total_rows: analysis.counts.total, eligible_count: analysis.counts.eligible, excluded_count: analysis.counts.excluded, green_count: analysis.counts.green, yellow_count: analysis.counts.yellow, amber_count: analysis.counts.amber, red_count: analysis.counts.red, mapping_confidence: analysis.mapping_confidence, detected_sheet: selected.name, detected_header_row: analysis.detected_header_row, rule_version: RKH_ASSURANCE_ENGINE.RULE_VERSION, error_code: '', error_message: '', updated_at: new Date().toISOString() };\n  fs.writeFileSync(input.results_json_path, JSON.stringify({ run: summary, mapping: analysis.mapping, results: analysis.rows }, null, 2));\n  fs.writeFileSync(input.results_csv_path, csv);\n  fs.writeFileSync(runPath, JSON.stringify(summary, null, 2));\n  return [{ json: { ...summary, results: analysis.rows } }];\n} catch (error) {\n  const failed = { ...input, status: 'FAILED', error_code: error.message || 'PROCESSING_FAILED', error_message: 'The report could not be processed. Inspect the workflow execution for technical details.', updated_at: new Date().toISOString() };\n  fs.writeFileSync(runPath, JSON.stringify(failed, null, 2));\n  return [{ json: failed }];\n}"
+        "jsCode": "const input = $input.first().json;\nreturn [{ json: { ...input, status: 'PREPARING', updated_at: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "update-preparing-run",
+      "name": "Update Preparing Run",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        740,
+        300
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "assurance_runs"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "run_id",
+              "condition": "eq",
+              "keyValue": "={{$json.run_id}}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "run_id": "={{ $json.run_id ?? '' }}",
+            "filename": "={{ $json.filename ?? '' }}",
+            "source": "={{ $json.source ?? '' }}",
+            "created_at": "={{ $json.created_at ?? '' }}",
+            "updated_at": "={{ $json.updated_at ?? '' }}",
+            "status": "={{ $json.status ?? '' }}",
+            "total_rows": "={{ $json.total_rows ?? '' }}",
+            "eligible_count": "={{ $json.eligible_count ?? '' }}",
+            "excluded_count": "={{ $json.excluded_count ?? '' }}",
+            "green_count": "={{ $json.green_count ?? '' }}",
+            "yellow_count": "={{ $json.yellow_count ?? '' }}",
+            "amber_count": "={{ $json.amber_count ?? '' }}",
+            "red_count": "={{ $json.red_count ?? '' }}",
+            "mapping_confidence": "={{ $json.mapping_confidence ?? '' }}",
+            "rule_version": "={{ $json.rule_version ?? '' }}",
+            "detected_sheet": "={{ $json.detected_sheet ?? '' }}",
+            "detected_header_row": "={{ $json.detected_header_row ?? '' }}",
+            "error_code": "={{ $json.error_code ?? '' }}",
+            "error_message": "={{ $json.error_message ?? '' }}",
+            "source_base64": "={{ $json.source_base64 ?? '' }}",
+            "results_json": "={{ $json.results_json ?? '' }}",
+            "results_csv": "={{ $json.results_csv ?? '' }}"
+          },
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "filename",
+              "displayName": "filename",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "total_rows",
+              "displayName": "total_rows",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "eligible_count",
+              "displayName": "eligible_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "excluded_count",
+              "displayName": "excluded_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "green_count",
+              "displayName": "green_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "yellow_count",
+              "displayName": "yellow_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "amber_count",
+              "displayName": "amber_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "red_count",
+              "displayName": "red_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "mapping_confidence",
+              "displayName": "mapping_confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "rule_version",
+              "displayName": "rule_version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "detected_sheet",
+              "displayName": "detected_sheet",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "detected_header_row",
+              "displayName": "detected_header_row",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "error_code",
+              "displayName": "error_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "error_message",
+              "displayName": "error_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "source_base64",
+              "displayName": "source_base64",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "results_json",
+              "displayName": "results_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "results_csv",
+              "displayName": "results_csv",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "restore-preparing-context",
+      "name": "Restore Preparing Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        300
+      ],
+      "parameters": {
+        "jsCode": "return [{json: $('Mark Preparing').first().json}];"
+      }
+    },
+    {
+      "id": "build-source-binary",
+      "name": "Build Source Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nreturn [{ json: input, binary: { data: { data: input.source_base64, mimeType: 'text/csv', fileName: input.filename } } }];"
+      }
+    },
+    {
+      "id": "mark-analyzing",
+      "name": "Mark Analyzing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nreturn [{ json: { ...input, status: 'ANALYZING', updated_at: new Date().toISOString() }, binary: $input.first().binary }];"
+      }
+    },
+    {
+      "id": "update-analyzing-run",
+      "name": "Update Analyzing Run",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1700,
+        300
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "assurance_runs"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "run_id",
+              "condition": "eq",
+              "keyValue": "={{$json.run_id}}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "run_id": "={{ $json.run_id ?? '' }}",
+            "filename": "={{ $json.filename ?? '' }}",
+            "source": "={{ $json.source ?? '' }}",
+            "created_at": "={{ $json.created_at ?? '' }}",
+            "updated_at": "={{ $json.updated_at ?? '' }}",
+            "status": "={{ $json.status ?? '' }}",
+            "total_rows": "={{ $json.total_rows ?? '' }}",
+            "eligible_count": "={{ $json.eligible_count ?? '' }}",
+            "excluded_count": "={{ $json.excluded_count ?? '' }}",
+            "green_count": "={{ $json.green_count ?? '' }}",
+            "yellow_count": "={{ $json.yellow_count ?? '' }}",
+            "amber_count": "={{ $json.amber_count ?? '' }}",
+            "red_count": "={{ $json.red_count ?? '' }}",
+            "mapping_confidence": "={{ $json.mapping_confidence ?? '' }}",
+            "rule_version": "={{ $json.rule_version ?? '' }}",
+            "detected_sheet": "={{ $json.detected_sheet ?? '' }}",
+            "detected_header_row": "={{ $json.detected_header_row ?? '' }}",
+            "error_code": "={{ $json.error_code ?? '' }}",
+            "error_message": "={{ $json.error_message ?? '' }}",
+            "source_base64": "={{ $json.source_base64 ?? '' }}",
+            "results_json": "={{ $json.results_json ?? '' }}",
+            "results_csv": "={{ $json.results_csv ?? '' }}"
+          },
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "filename",
+              "displayName": "filename",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "total_rows",
+              "displayName": "total_rows",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "eligible_count",
+              "displayName": "eligible_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "excluded_count",
+              "displayName": "excluded_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "green_count",
+              "displayName": "green_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "yellow_count",
+              "displayName": "yellow_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "amber_count",
+              "displayName": "amber_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "red_count",
+              "displayName": "red_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "mapping_confidence",
+              "displayName": "mapping_confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "rule_version",
+              "displayName": "rule_version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "detected_sheet",
+              "displayName": "detected_sheet",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "detected_header_row",
+              "displayName": "detected_header_row",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "error_code",
+              "displayName": "error_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "error_message",
+              "displayName": "error_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "source_base64",
+              "displayName": "source_base64",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "results_json",
+              "displayName": "results_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "results_csv",
+              "displayName": "results_csv",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "restore-analyzing-context",
+      "name": "Restore Analyzing Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        300
+      ],
+      "parameters": {
+        "jsCode": "return [{json: $('Mark Analyzing').first().json, binary: $('Build Source Binary').first().binary}];"
+      }
+    },
+    {
+      "id": "route-csv-or-xlsx",
+      "name": "Route CSV or XLSX",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2180,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.filename.toLowerCase().endsWith(\".csv\")}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "extract-csv-rows",
+      "name": "Extract CSV Rows",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        220
+      ],
+      "parameters": {
+        "operation": "csv",
+        "binaryPropertyName": "data",
+        "options": {}
+      }
+    },
+    {
+      "id": "extract-xlsx-rows",
+      "name": "Extract XLSX Rows",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        400
+      ],
+      "parameters": {
+        "operation": "xlsx",
+        "binaryPropertyName": "data",
+        "options": {}
+      }
+    },
+    {
+      "id": "analyze-rows",
+      "name": "Analyze Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2660,
+        300
+      ],
+      "parameters": {
+        "jsCode": "/*\n * RKH Execution Assurance deterministic engine.\n *\n * This file is the only business-rule source of truth. The n8n workflow JSON\n * is generated from this file by scripts/build-n8n-workflows.js.\n */\nconst RKH_ASSURANCE_ENGINE = (() => {\n  const RULE_VERSION = 'MAXIMO-MMS-KEYWORD-v1';\n  const ELIGIBLE_STATUSES = ['COMP', 'COMPLETED', 'REVIEWED', 'CLOSED', 'CLOSE', 'COMPLETE'];\n  const SEVERITY = { Excluded: -1, Green: 0, Yellow: 1, Amber: 2, Red: 3 };\n\n  const POLICY = {\n    pmOverdue: { grade: 'Amber', status: 'OPEN' },\n    pmScope: { grade: 'Red', status: 'OPEN' },\n    pmDefectWithReference: { grade: 'Green', status: 'OPEN' },\n    cmGenericDefect: { grade: 'Yellow', status: 'OPEN' },\n    cmUnspecified: { grade: 'Amber', status: 'OPEN' },\n    cmRelationshipUnknown: { grade: 'Amber', status: 'OPEN' },\n    cmInsufficientEvidence: { grade: 'Amber', status: 'OPEN' },\n    missingWorklog: { grade: 'Red', status: 'OPEN' },\n    unknownType: { grade: 'Amber', status: 'OPEN' },\n    negation: { status: 'PROVISIONAL' },\n  };\n\n  const FIELD_ALIASES = {\n    wo_number: ['work order number', 'work order', 'wo number', 'wonum', 'workorder', 'work order no', 'wo no', 'wo'],\n    work_type: ['work type', 'wo type', 'work order type', 'type', 'worktype', 'maintenance type'],\n    status: ['status', 'wo status', 'work order status'],\n    location: ['location', 'location code', 'station', 'site', 'locations', 'functional location'],\n    actual_finish: ['actual finish date', 'actual finish', 'actfinish', 'actual completion date', 'completion date', 'actual finish datetime'],\n    finish_no_later_than: ['finish no later than', 'finish no later than date', 'fnlt', 'due date', 'target finish', 'finish nlt', 'finish no later'],\n    tanc_reference: ['tanc', 'tanc number', 'tanc no', 'tanc ref', 'tanc reference'],\n    defect_reference: ['defect reference', 'defect ref', 'defect number', 'defect no', 'follow up', 'follow-up', 'follow up reference', 'linked wo', 'related wo', 'defect id'],\n    original_problem: ['original problem', 'fault description', 'problem', 'description', 'short description', 'reported fault', 'issue description', 'work order description'],\n    worklog: ['closure log', 'work log', 'worklog', 'completion notes', 'actual work', 'work log details', 'wo log', 'completion log', 'long description', 'worklog details', 'comments'],\n    contractor: ['contractor', 'vendor', 'company', 'responsible contractor', 'maintenance performer', 'supplier'],\n    relationship_confirmed_mismatch: ['relationship mismatch confirmed', 'confirmed mismatch', 'worklog unrelated confirmed'],\n  };\n\n  const RULES = {\n    pm: {\n      incomplete: { id: 'PM-R04', phrases: ['incomplete'], grade: 'Amber', category: 'PM closed but work incomplete', action: 'Site verification / Assurance inspection required', reason_code: 'PM_INCOMPLETE', status: 'LOCKED' },\n      partial: { id: 'PM-R05', phrases: ['partially completed'], grade: 'Amber', category: 'PM closed but work incomplete', action: 'Site verification / Assurance inspection required', reason_code: 'PM_PARTIAL', status: 'LOCKED' },\n      ongoing: { id: 'PM-R06', phrases: ['on going activity', 'ongoing activity'], grade: 'Amber', category: 'PM closed but work incomplete', action: 'Site verification / Assurance inspection required', reason_code: 'PM_ONGOING', status: 'LOCKED' },\n      asset_not_found: { id: 'PM-R07', phrases: ['asset not found'], grade: 'Amber', category: 'PM not performed but WO was closed', action: 'Site verification required', reason_code: 'PM_ASSET_NOT_FOUND', status: 'LOCKED' },\n      scope: { id: 'PM-R08/R09', phrases: ['not in our scope', 'out of scope'], grade: 'Red', category: 'PM closed but work not done', action: 'Engineer notified and CAR raised', reason_code: 'PM_SCOPE_EXCEPTION', status: 'OPEN' },\n      not_found: { id: 'PM-R10', phrases: ['not found'], grade: 'Red', category: 'PM closed but work not done', action: 'Engineer notified and CAR raised', reason_code: 'PM_NOT_FOUND', status: 'LOCKED' },\n      defect: { id: 'PM-R11/R12', phrases: ['defect'], grade: 'Red', category: 'PM not performed but WO was closed', action: 'Engineer notified and CAR raised', reason_code: 'PM_DEFECT_NO_REFERENCE', status: 'LOCKED' },\n      not_done: { id: 'PM-R13', phrases: ['not done'], grade: 'Red', category: 'PM closed but work not done', action: 'Engineer notified and CAR raised', reason_code: 'PM_NOT_DONE', status: 'LOCKED' },\n    },\n    cm: {\n      weak: { id: 'CM-R03', phrases: ['attended', 'cm attended', 'checked', 'observed', 'inspected', 'booked in', 'closed', 'cm closed', 'na', 'n/a', 'sign off notes'], grade: 'Amber', category: 'Discrepancies found and can be verified on site', action: 'Assurance team verifies on site and reports to engineer', reason_code: 'CM_WEAK_SHORT', status: 'LOCKED' },\n      pending: { id: 'CM-R04', phrases: ['pending', 'on hold', 'waiting', 'awaiting', 'under process', 'under observation', 'monitoring', 'to be completed', 'to be rectified', 'will be', 'need to', 'needs to', 'required to', 'further rectification', 'further action', 'forwarded', 'forward to', 'passed to', 'assigned to'], grade: 'Amber', category: 'Discrepancies found and can be verified on site', action: 'Engineers notified and Assurance Team perform site verification', reason_code: 'CM_PENDING_FUTURE', status: 'LOCKED' },\n      no_fault: { id: 'CM-R05', phrases: ['no fault found', 'no issue found', 'working normal', 'no abnormality', 'no failure', 'normal operation'], grade: 'Amber', category: 'Discrepancies found and can be verified on site', action: 'Engineers notified and Assurance Team perform site verification', reason_code: 'CM_NO_FAULT', status: 'LOCKED' },\n      temporary: { id: 'CM-R06', phrases: ['temporary', 'area barricaded', 'barricaded', 'isolated', 'signage placed', 'out of service'], grade: 'Amber', category: 'Discrepancies found and can be verified on site', action: 'Engineers notified and Assurance Team perform site verification', reason_code: 'CM_TEMPORARY', status: 'LOCKED' },\n      material: { id: 'CM-R07', phrases: ['material required', 'waiting material', 'waiting for material', 'pending material', 'spare required', 'quotation required', 'parts not available'], grade: 'Amber', category: 'Discrepancies found and can be verified on site', action: 'Engineers notified and Assurance Team perform site verification', reason_code: 'CM_MATERIAL', status: 'LOCKED' },\n      leakage: { id: 'CM-R08', phrases: ['water leakage', 'water dripping', 'structural leakage', 'water proofing', 'waterproofing', 'ceiling stain', 'seepage', 'grp leakage'], grade: 'Yellow', category: 'Defect related CM', action: 'Engineers notified; engineer verifies defect process', reason_code: 'CM_DEFECT_LEAKAGE', status: 'LOCKED' },\n      generic_defect: { id: 'CM-R09', phrases: ['defect', 's200', 'under defect', 'com-ltr'], grade: 'Yellow', category: 'Defect related CM', action: 'Engineers notified; engineer verifies defect process', reason_code: 'CM_DEFECT_GENERIC', status: 'OPEN' },\n      no_access: { id: 'CM-R10', phrases: ['no access', 'unable to access', 'unale to access', 'in accessible', 'inaccessible', 'mewp required', 'scaffolding required', 'height access required', 'unable to complete'], grade: 'Red', category: 'WO was closed without sufficient rectification', action: 'Engineer reviews WO and raises CAR if necessary', reason_code: 'CM_NO_ACCESS', status: 'LOCKED' },\n      unspecified: { id: 'CM-R11', phrases: ['duplicate', 'cancelled', 'canceled', 'out of scope', 'not in scope'], grade: 'Amber', category: 'Manual review - CM disposition not specified', action: 'Human assurance review required', reason_code: 'CM_UNSPECIFIED', status: 'OPEN' },\n    },\n  };\n\n  const RECTIFICATION = ['repaired', 'replaced', 'rectified', 'fixed', 'renewed', 'changed', 'installed', 'reset', 'adjusted', 'tightened', 'cleaned', 'calibrated', 'commissioned', 'corrected'];\n  const VERIFICATION = ['tested', 'functional test', 'function test', 'operational test', 'verified', 'restored', 'returned to service', 'back in service', 'resolved', 'normal operation', 'operational'];\n\n  function text(value) { return String(value == null ? '' : value).trim(); }\n  function normalizeHeader(value) { return text(value).toLowerCase().normalize('NFKD').replace(/[\\u0300-\\u036f]/g, '').replace(/[_-]+/g, ' ').replace(/\\s+/g, ' '); }\n  function normalizeMatch(value) { return text(value).toLowerCase().normalize('NFKD').replace(/[\\u0300-\\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').replace(/\\s+/g, ' ').trim(); }\n  function unique(values) { return [...new Set((values || []).filter(Boolean))]; }\n  function severity(grade) { return SEVERITY[grade] == null ? 0 : SEVERITY[grade]; }\n  function meaningfulReference(value) { return !['', 'n/a', 'na', 'none', 'null', '-', '0', 'not found'].includes(normalizeMatch(value)); }\n  function words(value) { return normalizeMatch(value).split(' ').filter(Boolean); }\n  function containsSequence(sourceTokens, patternTokens) {\n    if (!patternTokens.length || patternTokens.length > sourceTokens.length) return [];\n    const starts = [];\n    for (let i = 0; i <= sourceTokens.length - patternTokens.length; i += 1) {\n      if (patternTokens.every((token, offset) => sourceTokens[i + offset] === token)) starts.push(i);\n    }\n    return starts;\n  }\n  function isNegated(sourceTokens, start) {\n    return ['not', 'no', 'without'].includes(sourceTokens[start - 1]) || ['not', 'no', 'without'].includes(sourceTokens[start - 2]);\n  }\n  function matches(textValue, phrases) {\n    const source = words(textValue);\n    const hitList = [];\n    for (const phrase of phrases) {\n      const pattern = words(phrase);\n      for (const start of containsSequence(source, pattern)) {\n        if (!isNegated(source, start)) hitList.push({ phrase, start, end: start + pattern.length - 1 });\n      }\n    }\n    return hitList;\n  }\n  function hitPhrases(textValue, phrases) { return unique(matches(textValue, phrases).map(hit => hit.phrase)); }\n\n  function parseDate(value) {\n    const raw = text(value);\n    if (!raw) return null;\n    if (/^\\d{5}(\\.\\d+)?$/.test(raw)) {\n      const date = new Date((Number(raw) - 25569) * 86400000);\n      return Number.isNaN(date.getTime()) ? null : new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));\n    }\n    let match = raw.match(/^(\\d{4})[-/](\\d{1,2})[-/](\\d{1,2})/);\n    if (match) return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));\n    match = raw.match(/^(\\d{1,2})[-/](\\d{1,2})[-/](\\d{4})/);\n    if (match) return new Date(Date.UTC(Number(match[3]), Number(match[2]) - 1, Number(match[1])));\n    const date = new Date(raw);\n    return Number.isNaN(date.getTime()) ? null : new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));\n  }\n  function dateLabel(date) { return date ? `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}` : ''; }\n\n  function scoreHeader(row) {\n    const cells = row.map(normalizeHeader).filter(Boolean);\n    return Object.values(FIELD_ALIASES).reduce((score, aliases) => score + (aliases.some(alias => cells.some(cell => cell === normalizeHeader(alias) || cell.includes(normalizeHeader(alias)) || normalizeHeader(alias).includes(cell))) ? 1 : 0), 0);\n  }\n  function detectHeader(matrix, maxRows = 25) {\n    let best = { index: -1, score: -1 };\n    matrix.slice(0, maxRows).forEach((row, index) => {\n      const score = scoreHeader(row);\n      if (score > best.score) best = { index, score };\n    });\n    return best;\n  }\n  function matrixToRows(matrix, headerIndex) {\n    if (headerIndex < 0 || !matrix[headerIndex]) return { headers: [], rows: [] };\n    const headers = matrix[headerIndex].map((header, index) => text(header) || `Column ${index + 1}`);\n    const rows = matrix.slice(headerIndex + 1).filter(row => row.some(value => text(value) !== '')).map(row => Object.fromEntries(headers.map((header, index) => [header, row[index] == null ? '' : row[index]])));\n    return { headers, rows };\n  }\n  function mapHeaders(headers) {\n    const normalized = headers.map(header => ({ header, value: normalizeHeader(header) }));\n    const mapping = {};\n    for (const [field, aliases] of Object.entries(FIELD_ALIASES)) {\n      let found = normalized.find(item => aliases.some(alias => item.value === normalizeHeader(alias)));\n      if (!found) found = normalized.find(item => aliases.some(alias => item.value && (item.value.includes(normalizeHeader(alias)) || normalizeHeader(alias).includes(item.value))));\n      mapping[field] = found ? found.header : '';\n    }\n    return mapping;\n  }\n  function mappingConfidence(mapping) {\n    const weights = { wo_number: 3, worklog: 3, work_type: 2, status: 1, location: 1, actual_finish: 1, finish_no_later_than: 1, tanc_reference: 0.5, defect_reference: 0.5, original_problem: 1, contractor: 0.5 };\n    let present = 0; let total = 0;\n    Object.entries(weights).forEach(([field, weight]) => { total += weight; if (mapping[field]) present += weight; });\n    return Math.round((present / total) * 100);\n  }\n\n  function valueFor(row, mapping, field) { return mapping[field] ? row[mapping[field]] : ''; }\n  function inferType(row, mapping, defaultType = '') {\n    const mapped = text(valueFor(row, mapping, 'work_type')).toUpperCase();\n    if (mapped.includes('PM') || mapped.includes('PREVENT')) return 'PM';\n    if (mapped.includes('CM') || mapped.includes('CORRECT')) return 'CM';\n    const wo = text(valueFor(row, mapping, 'wo_number')).toUpperCase();\n    if (/^PM(?:[\\s_-]|$)/.test(wo)) return 'PM';\n    if (/^CM(?:[\\s_-]|$)/.test(wo)) return 'CM';\n    return defaultType || 'UNKNOWN';\n  }\n  function relationCheck(problem, worklog, confirmedMismatch = false) {\n    if (confirmedMismatch) return { state: 'Description and worklog confirmed unrelated', shared: [] };\n    const stop = new Set(['the', 'and', 'for', 'with', 'from', 'was', 'were', 'are', 'is', 'to', 'of', 'in', 'on', 'at', 'a', 'an', 'this', 'that', 'wo', 'work', 'order', 'cm', 'pm', 'system', 'equipment', 'found', 'reported', 'issue']);\n    const problemTokens = unique(words(problem).filter(word => word.length > 2 && !stop.has(word)));\n    const logTokens = new Set(words(worklog).filter(word => word.length > 2 && !stop.has(word)));\n    const shared = problemTokens.filter(word => logTokens.has(word));\n    if (problemTokens.length < 2 || logTokens.size < 2) return { state: 'Not enough text for deterministic relation check', shared };\n    return shared.length ? { state: 'Description and worklog share some terms', shared } : { state: 'No clear lexical overlap - manual relationship review required', shared: [] };\n  }\n\n  function candidate(rule, hits, overrides = {}) {\n    return { rule_id: rule.id, grade: overrides.grade || rule.grade, category: overrides.category || rule.category, action: overrides.action || rule.action, reason_code: overrides.reason_code || rule.reason_code, keyword_hits: hits, policy_status: overrides.policy_status || rule.status, reasons: overrides.reasons || [] };\n  }\n  function chooseCandidates(base, candidates) {\n    const all = [base, ...candidates].filter(Boolean);\n    const best = all.reduce((current, next) => {\n      if (severity(next.grade) > severity(current.grade)) return next;\n      if (severity(next.grade) === severity(current.grade) && current.reason_code === 'CM_RELATIONSHIP_REVIEW' && next.reason_code !== 'CM_RELATIONSHIP_REVIEW') return next;\n      return current;\n    });\n    const triggered = all.filter(item => item !== base);\n    const policyStatuses = unique(triggered.map(item => item.policy_status));\n    const multiple = new Set(triggered.map(item => item.grade)).size > 1;\n    return {\n      ...best,\n      keyword_hits: unique(triggered.flatMap(item => item.keyword_hits || [])),\n      matched_rule_ids: unique(triggered.map(item => item.rule_id)),\n      policy_statuses: policyStatuses,\n      policy_status: policyStatuses.includes('OPEN') ? 'OPEN' : (policyStatuses.includes('PROVISIONAL') ? 'PROVISIONAL' : 'LOCKED'),\n      reason_code: multiple ? `MULTI_HIT_${best.grade.toUpperCase()}_WINS` : best.reason_code,\n      reasons: unique(triggered.flatMap(item => item.reasons || []).concat(best.reasons || [])),\n    };\n  }\n\n  function analyzePM(row) {\n    const log = text(row.worklog);\n    const candidates = [];\n    const finish = parseDate(row.actual_finish); const due = parseDate(row.finish_no_later_than);\n    if (finish && due && finish > due) {\n      candidates.push({ rule_id: 'PM-R03', grade: POLICY.pmOverdue.grade, category: 'PM overdue', action: meaningfulReference(row.tanc_reference) ? 'TANC reference found - no further action required' : 'Engineer review - TANC not found', reason_code: 'PM_OVERDUE', keyword_hits: ['PM overdue'], policy_status: POLICY.pmOverdue.status, reasons: [`Actual Finish (${dateLabel(finish)}) is later than Finish No Later Than (${dateLabel(due)})`, meaningfulReference(row.tanc_reference) ? 'TANC reference is present' : 'TANC reference is missing'] });\n    }\n    const assetHits = hitPhrases(log, RULES.pm.asset_not_found.phrases);\n    if (assetHits.length) candidates.push(candidate(RULES.pm.asset_not_found, assetHits, { reason_code: normalizeMatch(row.original_problem).includes('scheduled asset') ? 'PM_ASSET_NOT_FOUND' : 'SPECIFIC_PHRASE_PRECEDENCE', reasons: ['Specific PM step matched: Asset Not Found before generic not found'] }));\n    for (const key of ['incomplete', 'partial', 'ongoing']) { const rule = RULES.pm[key]; const hits = hitPhrases(log, rule.phrases); if (hits.length) candidates.push(candidate(rule, hits, { reasons: ['PM keyword matrix indicates incomplete / ongoing work'] })); }\n    const scopeHits = hitPhrases(log, RULES.pm.scope.phrases);\n    if (scopeHits.length) candidates.push(candidate(RULES.pm.scope, scopeHits, { reasons: ['PM keyword matrix matched a work-not-done / scope exception'] }));\n    const notFoundHits = assetHits.length ? [] : hitPhrases(log, RULES.pm.not_found.phrases);\n    if (notFoundHits.length) candidates.push(candidate(RULES.pm.not_found, notFoundHits, { reasons: ['Generic \"not found\" keyword matched the PM keyword table'] }));\n    const defectHits = hitPhrases(log, RULES.pm.defect.phrases);\n    if (defectHits.length) {\n      if (meaningfulReference(row.defect_reference)) candidates.push({ rule_id: 'PM-R12', grade: POLICY.pmDefectWithReference.grade, category: 'Defect documented', action: 'Defect reference found - no further action required', reason_code: 'PM_DEFECT_WITH_REFERENCE', keyword_hits: defectHits, policy_status: POLICY.pmDefectWithReference.status, reasons: ['Defect keyword detected', 'Defect / follow-up reference is present'] });\n      else candidates.push(candidate(RULES.pm.defect, defectHits, { reasons: ['Defect keyword detected', 'Defect reference not found'] }));\n    }\n    const notDoneHits = hitPhrases(log, RULES.pm.not_done.phrases);\n    if (notDoneHits.length) candidates.push(candidate(RULES.pm.not_done, notDoneHits, { reasons: ['PM keyword matrix matched a work-not-done / scope exception'] }));\n    if (!candidates.length) return { grade: 'Green', category: 'No obvious discrepancies', action: 'No action', reason_code: finish && due && finish <= due ? (finish.getTime() === due.getTime() ? 'PM_ON_TIME' : 'PM_EARLY') : 'PM_NO_OBVIOUS_DISCREPANCY', keyword_hits: [], matched_rule_ids: ['PM-R01/PM-R02/PM-R14'], policy_status: 'LOCKED', policy_statuses: ['LOCKED'], reasons: ['No PM exception keyword was triggered'], warnings: [] };\n    const result = chooseCandidates({ grade: 'Green', category: 'No obvious discrepancies', action: 'No action', reason_code: 'PM_NO_OBVIOUS_DISCREPANCY', keyword_hits: [], matched_rule_ids: [], policy_status: 'LOCKED', policy_statuses: ['LOCKED'], reasons: [] }, candidates);\n    return { ...result, reason_code: result.reason_code.startsWith('MULTI_HIT_') ? `PM_${result.reason_code}` : result.reason_code, warnings: [] };\n  }\n\n  function analyzeCM(row) {\n    const log = text(row.worklog); const candidates = [];\n    const rectification = hitPhrases(log, RECTIFICATION); const verification = hitPhrases(log, VERIFICATION);\n    const weakHits = hitPhrases(log, RULES.cm.weak.phrases); const wordCount = words(log).length;\n    const initialRelation = relationCheck(row.original_problem, log, row.relationship_confirmed_mismatch === true || text(row.relationship_confirmed_mismatch).toLowerCase() === 'true');\n    const relation = initialRelation.state.startsWith('No clear') && weakHits.length && wordCount <= 12 && !verification.length\n      ? { state: 'Short closure requires the weak-closure rule; relationship is not inferred', shared: initialRelation.shared }\n      : initialRelation;\n    if (relation.state === 'Description and worklog confirmed unrelated') return { grade: 'Red', category: 'Worklog unrelated to reported fault', action: 'Engineers notified and CAR raised for subcontractor justification/action', reason_code: 'CM_RELATIONSHIP_MISMATCH_CONFIRMED', keyword_hits: [], matched_rule_ids: ['CM-R02'], policy_status: 'LOCKED', policy_statuses: ['LOCKED'], reasons: ['CM procedure requires the worklog to relate to the original fault', 'Mismatch was explicitly confirmed'], warnings: [], relation };\n    else if (relation.state.startsWith('No clear lexical overlap')) { /* evaluated after concrete keyword rules */ }\n    for (const key of ['no_access', 'leakage', 'generic_defect', 'no_fault', 'temporary', 'material', 'unspecified', 'pending']) {\n      const rule = RULES.cm[key]; let hits = hitPhrases(log, rule.phrases);\n      if (key === 'no_fault' && rectification.length && verification.length) hits = hits.filter(hit => hit !== 'normal operation');\n      if (hits.length) candidates.push(candidate(rule, hits, { reason_code: key === 'no_access' && hits.includes('unable to complete') ? 'CM_UNABLE_COMPLETE' : key === 'pending' && hits.some(hit => ['forwarded', 'forward to'].includes(hit)) ? 'CM_FORWARDED' : key === 'leakage' && hits.some(hit => ['seepage', 'waterproofing', 'water proofing'].includes(hit)) ? 'CM_DEFECT_SEEPAGE' : undefined, reasons: [key === 'no_access' ? 'No-access / unable-to-complete keyword matched the CM validation table' : `${key.replace('_', ' ')} keyword matched the CM validation table`] }));\n    }\n    if (weakHits.length && wordCount <= 12 && !candidates.length && !(initialRelation.state.startsWith('No clear') && verification.length)) candidates.push(candidate(RULES.cm.weak, weakHits, { reasons: [`Worklog is short (${wordCount} words) and contains weak closure language`] }));\n    if (!candidates.length && relation.state.startsWith('No clear lexical overlap')) return { grade: POLICY.cmRelationshipUnknown.grade, category: 'Relationship not deterministically established', action: 'Manual relationship review required before treating the CM as Green', reason_code: 'CM_RELATIONSHIP_REVIEW', keyword_hits: [], matched_rule_ids: ['CM-R02'], policy_status: POLICY.cmRelationshipUnknown.status, policy_statuses: [POLICY.cmRelationshipUnknown.status], reasons: ['CM procedure requires the worklog to relate to the original fault', 'No clear lexical overlap was detected; lexical non-overlap alone does not prove a mismatch'], warnings: ['Lexical non-overlap alone does not prove a semantic mismatch'], relation };\n    if (!candidates.length && rectification.length && verification.length) return { grade: 'Green', category: 'The CM was performed and no obvious discrepancies found', action: 'No action', reason_code: words(log).includes('final') && !weakHits.includes('na') ? 'BOUNDARY_NA_FALSE_POSITIVE' : 'CM_NO_OBVIOUS_DISCREPANCY', keyword_hits: unique([...rectification, ...verification]), matched_rule_ids: ['CM-R01'], policy_status: 'LOCKED', policy_statuses: ['LOCKED'], reasons: ['Concrete rectification evidence detected', 'Testing / restoration evidence detected'], warnings: [], relation };\n    if (!candidates.length) return { grade: POLICY.cmInsufficientEvidence.grade, category: 'Insufficient evidence fault fully resolved', action: 'Assurance verification required before treating the CM as fully rectified', reason_code: 'CM_INSUFFICIENT_EVIDENCE', keyword_hits: unique([...rectification, ...verification]), matched_rule_ids: ['CM-R12'], policy_status: POLICY.cmInsufficientEvidence.status, policy_statuses: [POLICY.cmInsufficientEvidence.status], reasons: ['No listed discrepancy keyword was found, but the worklog lacks both concrete rectification and testing/restoration evidence'], warnings: ['Conservative guardrail prevents a false Green classification'], relation };\n    const result = chooseCandidates({ grade: 'Green', category: 'The CM was performed and no obvious discrepancies found', action: 'No action', reason_code: 'CM_NO_OBVIOUS_DISCREPANCY', keyword_hits: [], matched_rule_ids: [], policy_status: 'LOCKED', policy_statuses: ['LOCKED'], reasons: [] }, candidates);\n    return { ...result, reason_code: result.reason_code.startsWith('MULTI_HIT_') ? `CM_${result.reason_code}` : result.reason_code, warnings: relation.state.startsWith('No clear') ? ['Manual relationship review is required before treating this CM as fully resolved'] : [], relation };\n  }\n\n  function canonicalize(raw, index, mapping, defaultType = '') {\n    return {\n      row_number: index + 1,\n      wo_number: text(valueFor(raw, mapping, 'wo_number')) || `ROW-${index + 1}`,\n      work_type: inferType(raw, mapping, defaultType),\n      status: text(valueFor(raw, mapping, 'status')).toUpperCase(),\n      location: text(valueFor(raw, mapping, 'location')),\n      actual_finish: text(valueFor(raw, mapping, 'actual_finish')),\n      finish_no_later_than: text(valueFor(raw, mapping, 'finish_no_later_than')),\n      tanc_reference: text(valueFor(raw, mapping, 'tanc_reference')),\n      defect_reference: text(valueFor(raw, mapping, 'defect_reference')),\n      original_problem: text(valueFor(raw, mapping, 'original_problem')),\n      worklog: text(valueFor(raw, mapping, 'worklog')),\n      contractor: text(valueFor(raw, mapping, 'contractor')),\n      relationship_confirmed_mismatch: valueFor(raw, mapping, 'relationship_confirmed_mismatch'),\n    };\n  }\n  function analyzeRow(raw, index, mapping, options = {}) {\n    const row = canonicalize(raw, index, mapping, options.defaultType || '');\n    if (row.status && !ELIGIBLE_STATUSES.includes(row.status)) return { ...row, grade: 'Excluded', category: 'Outside validation population', action: 'No assurance grade assigned', reason_code: 'STATUS_NOT_ELIGIBLE', keyword_hits: [], matched_rule_ids: ['SYS-R01'], policy_status: 'PROVISIONAL', policy_statuses: ['PROVISIONAL'], reasons: [`Status \"${row.status}\" is not in the provisional eligible status set`], warnings: [], manual_review: false };\n    if (row.work_type === 'UNKNOWN') return { ...row, grade: POLICY.unknownType.grade, category: 'Unknown PM/CM type', action: 'Inspect automatic mapping or quarantine before business grading', reason_code: 'UNKNOWN_WORK_TYPE', keyword_hits: [], matched_rule_ids: ['OD-09'], policy_status: POLICY.unknownType.status, policy_statuses: [POLICY.unknownType.status], reasons: ['PM/CM-specific rules cannot run without a work type'], warnings: ['Work type was not confidently detected'], manual_review: true };\n    if (!row.worklog) return { ...row, grade: POLICY.missingWorklog.grade, category: 'Insufficient closure evidence', action: 'Human review required', reason_code: 'MISSING_WORKLOG', keyword_hits: [], matched_rule_ids: ['OD-08'], policy_status: POLICY.missingWorklog.status, policy_statuses: [POLICY.missingWorklog.status], reasons: ['No worklog text was available'], warnings: ['Missing worklog is an open policy default'], manual_review: true };\n    const analysis = row.work_type === 'PM' ? analyzePM(row) : analyzeCM(row);\n    return { ...row, ...analysis, manual_review: analysis.policy_statuses.includes('OPEN') || analysis.warnings.length > 0 || analysis.reason_code === 'CM_RELATIONSHIP_REVIEW' };\n  }\n\n  function analyzeRows(rawRows, options = {}) {\n    const rows = Array.isArray(rawRows) ? rawRows : [];\n    const headers = options.headers && options.headers.length ? options.headers : Object.keys(rows[0] || {});\n    const mapping = options.mapping || mapHeaders(headers);\n    const mapping_confidence = mappingConfidence(mapping);\n    const mapping_errors = [];\n    if (!mapping.wo_number) mapping_errors.push('Work Order Number');\n    if (!mapping.worklog) mapping_errors.push('Closure Log / Worklog');\n    if (mapping_errors.length) return { ok: false, error_code: 'CORE_MAPPING_FAILURE', error_message: `Required columns were not confidently identified: ${mapping_errors.join(', ')}`, mapping, mapping_confidence, rows: [], counts: { total: rows.length, eligible: 0, excluded: 0, green: 0, yellow: 0, amber: 0, red: 0 } };\n    const results = rows.map((row, index) => ({ ...analyzeRow(row, index, mapping, options), rule_version: RULE_VERSION, mapping_confidence }));\n    const counts = { total: results.length, eligible: results.filter(row => row.grade !== 'Excluded').length, excluded: results.filter(row => row.grade === 'Excluded').length, green: results.filter(row => row.grade === 'Green').length, yellow: results.filter(row => row.grade === 'Yellow').length, amber: results.filter(row => row.grade === 'Amber').length, red: results.filter(row => row.grade === 'Red').length };\n    return { ok: true, rule_version: RULE_VERSION, mapping, mapping_confidence, rows: results, counts };\n  }\n\n  function analyzeMatrix(matrix, options = {}) {\n    const header = detectHeader(matrix);\n    if (header.index < 0 || header.score < 2) return { ok: false, error_code: 'HEADER_NOT_DETECTED', error_message: 'Could not confidently detect a MAXIMO/MMS header row', mapping_confidence: 0, rows: [], counts: { total: 0, eligible: 0, excluded: 0, green: 0, yellow: 0, amber: 0, red: 0 } };\n    const converted = matrixToRows(matrix, header.index);\n    return { ...analyzeRows(converted.rows, { ...options, headers: converted.headers }), detected_header_row: header.index + 1, detected_header_score: header.score };\n  }\n\n  return { RULE_VERSION, POLICY, FIELD_ALIASES, RULES, ELIGIBLE_STATUSES, normalizeMatch, detectHeader, matrixToRows, mapHeaders, mappingConfidence, parseDate, meaningfulReference, analyzeRow, analyzeRows, analyzeMatrix };\n})();\n\nconst input = $('Receive Processor Payload').first().json;\nconst sourceRows = $input.all().map(item => item.json);\nconst rows = sourceRows.length === 1 && Array.isArray(sourceRows[0].data) ? sourceRows[0].data : sourceRows;\nconst headers = rows.length ? Object.keys(rows[0]) : [];\nconst analysis = RKH_ASSURANCE_ENGINE.analyzeRows(rows, { headers });\nif (!analysis.ok) throw new Error(analysis.error_code || 'CORE_MAPPING_FAILURE');\nconst csvFields = ['wo_number', 'work_type', 'status', 'location', 'grade', 'category', 'action', 'reason_code', 'keyword_hits', 'matched_rule_ids', 'policy_status', 'reasons', 'warnings', 'original_problem', 'worklog'];\nconst quote = value => '\"' + String(Array.isArray(value) ? value.join(' | ') : value ?? '').replaceAll('\"', '\"\"') + '\"';\nconst csv = [csvFields.join(',')].concat(analysis.rows.map(row => csvFields.map(field => quote(row[field])).join(','))).join('\\r\\n');\nconst analyzingRun = { ...input, status: 'ANALYZING', total_rows: analysis.counts.total, eligible_count: analysis.counts.eligible, excluded_count: analysis.counts.excluded, green_count: analysis.counts.green, yellow_count: analysis.counts.yellow, amber_count: analysis.counts.amber, red_count: analysis.counts.red, mapping_confidence: analysis.mapping_confidence, detected_sheet: input.filename.toLowerCase().endsWith('.csv') ? 'CSV' : 'first worksheet', detected_header_row: 1, rule_version: RKH_ASSURANCE_ENGINE.RULE_VERSION, error_code: '', error_message: '', updated_at: new Date().toISOString() };\nconst resultsJson = JSON.stringify({ run: analyzingRun, mapping: analysis.mapping, results: analysis.rows });\nconst summary = { ...analyzingRun, status: 'COMPLETED', results_json: resultsJson, results_csv: csv, updated_at: new Date().toISOString() };\nreturn [{ json: { ...summary, public_payload: { run: summary, mapping: analysis.mapping, results: analysis.rows } } }];"
       },
-      "notes": "Parses CSV/XLS/XLSX with the approved xlsx package, detects worksheet/header/mapping, executes the centralized deterministic engine, and writes run.json/results.json/results.csv.",
+      "notes": "Runs the centralized deterministic engine on rows extracted by native n8n file nodes.",
       "notesInFlow": true
+    },
+    {
+      "id": "update-completed-run",
+      "name": "Update Completed Run",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2900,
+        300
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "assurance_runs"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "run_id",
+              "condition": "eq",
+              "keyValue": "={{$json.run_id}}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "run_id": "={{ $json.run_id ?? '' }}",
+            "filename": "={{ $json.filename ?? '' }}",
+            "source": "={{ $json.source ?? '' }}",
+            "created_at": "={{ $json.created_at ?? '' }}",
+            "updated_at": "={{ $json.updated_at ?? '' }}",
+            "status": "={{ $json.status ?? '' }}",
+            "total_rows": "={{ $json.total_rows ?? '' }}",
+            "eligible_count": "={{ $json.eligible_count ?? '' }}",
+            "excluded_count": "={{ $json.excluded_count ?? '' }}",
+            "green_count": "={{ $json.green_count ?? '' }}",
+            "yellow_count": "={{ $json.yellow_count ?? '' }}",
+            "amber_count": "={{ $json.amber_count ?? '' }}",
+            "red_count": "={{ $json.red_count ?? '' }}",
+            "mapping_confidence": "={{ $json.mapping_confidence ?? '' }}",
+            "rule_version": "={{ $json.rule_version ?? '' }}",
+            "detected_sheet": "={{ $json.detected_sheet ?? '' }}",
+            "detected_header_row": "={{ $json.detected_header_row ?? '' }}",
+            "error_code": "={{ $json.error_code ?? '' }}",
+            "error_message": "={{ $json.error_message ?? '' }}",
+            "source_base64": "={{ $json.source_base64 ?? '' }}",
+            "results_json": "={{ $json.results_json ?? '' }}",
+            "results_csv": "={{ $json.results_csv ?? '' }}"
+          },
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "filename",
+              "displayName": "filename",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "total_rows",
+              "displayName": "total_rows",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "eligible_count",
+              "displayName": "eligible_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "excluded_count",
+              "displayName": "excluded_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "green_count",
+              "displayName": "green_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "yellow_count",
+              "displayName": "yellow_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "amber_count",
+              "displayName": "amber_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "red_count",
+              "displayName": "red_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "mapping_confidence",
+              "displayName": "mapping_confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "rule_version",
+              "displayName": "rule_version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "detected_sheet",
+              "displayName": "detected_sheet",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "detected_header_row",
+              "displayName": "detected_header_row",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "error_code",
+              "displayName": "error_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "error_message",
+              "displayName": "error_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "source_base64",
+              "displayName": "source_base64",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "results_json",
+              "displayName": "results_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "results_csv",
+              "displayName": "results_csv",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {}
+      }
     }
   ],
   "connections": {
@@ -35,7 +933,135 @@
       "main": [
         [
           {
-            "node": "Analyze and Persist Results",
+            "node": "Mark Preparing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Preparing": {
+      "main": [
+        [
+          {
+            "node": "Update Preparing Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Preparing Run": {
+      "main": [
+        [
+          {
+            "node": "Restore Preparing Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Preparing Context": {
+      "main": [
+        [
+          {
+            "node": "Build Source Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Source Binary": {
+      "main": [
+        [
+          {
+            "node": "Mark Analyzing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Analyzing": {
+      "main": [
+        [
+          {
+            "node": "Update Analyzing Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Analyzing Run": {
+      "main": [
+        [
+          {
+            "node": "Restore Analyzing Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Analyzing Context": {
+      "main": [
+        [
+          {
+            "node": "Route CSV or XLSX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route CSV or XLSX": {
+      "main": [
+        [
+          {
+            "node": "Extract CSV Rows",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract XLSX Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract CSV Rows": {
+      "main": [
+        [
+          {
+            "node": "Analyze Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract XLSX Rows": {
+      "main": [
+        [
+          {
+            "node": "Analyze Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Rows": {
+      "main": [
+        [
+          {
+            "node": "Update Completed Run",
             "type": "main",
             "index": 0
           }

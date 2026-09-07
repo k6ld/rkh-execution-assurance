@@ -32,7 +32,7 @@ The M0 parity test reads the local handoff's expected-results JSON from the path
 
 ## GitHub Pages
 
-Publish the repository root as a GitHub Pages source. The static site contains no operational report data and no secrets. Set the n8n URL in `frontend/config.js` or in a deployment-specific config file. The default is the development URL `http://localhost:5678`.
+Publish the repository root as a GitHub Pages source. The static site contains no operational report data and no secrets. `frontend/config.js` is configured for the existing VPS n8n endpoint; use a deployment-specific config only when the endpoint changes.
 
 GitHub Pages cannot reach another user's localhost. Department-wide use requires an approved reachable HTTPS n8n endpoint, authentication, and a CORS allowlist.
 
@@ -40,15 +40,14 @@ GitHub Pages cannot reach another user's localhost. Department-wide use requires
 
 Read [`docs/n8n-setup.md`](docs/n8n-setup.md) before importing. The short version is:
 
-1. Set the n8n Code node allowlist for `fs`, `path`, and `xlsx`.
-2. Install the `xlsx` package into the n8n runtime.
-3. Import `rkh-maximo-mms-processor.json` first.
-4. Import `rkh-dashboard-upload-api.json` and replace its processor workflow ID placeholder.
-5. Import the three read API workflows.
-6. Import the email template only after sender, subject, and mailbox policy are approved.
-7. Configure CORS/auth/reverse proxy before any shared deployment.
+1. Ensure the n8n Data Table node is available; the workflow creates or reuses `assurance_runs`.
+2. Import `rkh-maximo-mms-processor.json` first.
+3. Import `rkh-dashboard-upload-api.json` with the processor workflow ID injected by the generator.
+4. Import the three read API workflows.
+5. Import the email template only after sender, subject, and mailbox policy are approved.
+6. Configure CORS/auth/reverse proxy before any shared deployment.
 
-The generated workflows use the persistent `RKH_ASSURANCE_DATA_DIR` root and write `runs/<run_id>/source`, `run.json`, `results.json`, and `results.csv`. A corrupt or unmappable report is persisted as `FAILED`; it is not presented as a successful empty run.
+The generated workflows store run metadata, the synthetic/source payload, and results JSON/CSV in the persistent `assurance_runs` Data Table. A corrupt or unmappable report is persisted as `FAILED`; it is not presented as a successful empty run.
 
 ## Current status
 

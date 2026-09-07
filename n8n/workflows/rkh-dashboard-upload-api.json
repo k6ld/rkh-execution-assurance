@@ -12,18 +12,19 @@
       ],
       "parameters": {
         "httpMethod": "POST",
-        "path": "rkh-dashboard-upload",
+        "path": "rkh-v2-dashboard-upload",
         "responseMode": "responseNode",
         "options": {
           "rawBody": false
         }
       },
       "notes": "POST multipart/form-data with the file in binary property data.",
-      "notesInFlow": true
+      "notesInFlow": true,
+      "webhookId": "722323ba-43d8-4b09-8875-b4e40139cb29"
     },
     {
-      "id": "validate-persist-and-create-run",
-      "name": "Validate, Persist, and Create Run",
+      "id": "validate-and-create-run",
+      "name": "Validate and Create Run",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -31,10 +32,393 @@
         300
       ],
       "parameters": {
-        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst item = $input.first();\nconst binary = item.binary && item.binary.data;\nif (!binary || !binary.data) throw new Error('UPLOAD_BINARY_MISSING');\nconst filename = String(binary.fileName || item.json.body?.filename || 'upload').split(/[\\/]/).pop();\nconst extension = filename.toLowerCase().split('.').pop();\nif (!['csv', 'xlsx', 'xls'].includes(extension)) throw new Error('UNSUPPORTED_FILE_TYPE');\nconst maxBytes = Number(process.env.RKH_MAX_UPLOAD_BYTES || 25000000);\nconst sourceBuffer = Buffer.from(binary.data, 'base64');\nif (sourceBuffer.length > maxBytes) throw new Error('UPLOAD_TOO_LARGE');\nconst now = new Date();\nconst day = now.toISOString().slice(0, 10).replaceAll('-', '');\nconst stamp = day + '-' + now.toISOString().slice(11, 19).replaceAll(':', '');\nconst runId = 'RKH-' + day + '-' + stamp + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();\nconst dataRoot = process.env.RKH_ASSURANCE_DATA_DIR || path.join(process.cwd(), 'rkh-assurance-data');\nconst runDir = path.join(dataRoot, 'runs', runId);\nfs.mkdirSync(runDir, { recursive: true });\nconst sourcePath = path.join(runDir, filename.replace(/[^a-zA-Z0-9._-]/g, '_'));\nconst runPath = path.join(runDir, 'run.json');\nconst run = { run_id: runId, filename, source: 'DASHBOARD_UPLOAD', created_at: now.toISOString(), updated_at: now.toISOString(), status: 'RECEIVED', total_rows: 0, eligible_count: 0, excluded_count: 0, green_count: 0, yellow_count: 0, amber_count: 0, red_count: 0, source_path: sourcePath, results_json_path: path.join(runDir, 'results.json'), results_csv_path: path.join(runDir, 'results.csv'), mapping_confidence: 0, rule_version: 'MAXIMO-MMS-KEYWORD-v1', error_code: '', error_message: '' };\nfs.writeFileSync(sourcePath, sourceBuffer);\nfs.writeFileSync(runPath, JSON.stringify(run, null, 2));\nreturn [{ json: { ...run, response: { run_id: runId, status: 'RECEIVED' } } }];"
+        "jsCode": "const item = $input.first();\nconst binary = item.binary && item.binary.data;\nif (!binary) throw new Error('UPLOAD_BINARY_MISSING');\nconst filename = String(binary.fileName || item.json.body?.filename || 'upload').split(/[\\/]/).pop();\nconst extension = filename.toLowerCase().split('.').pop();\nif (!['csv', 'xlsx', 'xls'].includes(extension)) throw new Error('UNSUPPORTED_FILE_TYPE');\nconst sourceBuffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst maxBytes = 25000000;\nif (sourceBuffer.length > maxBytes) throw new Error('UPLOAD_TOO_LARGE');\nconst now = new Date();\nconst day = now.toISOString().slice(0, 10).replaceAll('-', '');\nconst stamp = day + '-' + now.toISOString().slice(11, 19).replaceAll(':', '');\nconst runId = 'RKH-' + day + '-' + stamp + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();\nconst run = { run_id: runId, filename, source: 'DASHBOARD_UPLOAD', created_at: now.toISOString(), updated_at: now.toISOString(), status: 'RECEIVED', total_rows: 0, eligible_count: 0, excluded_count: 0, green_count: 0, yellow_count: 0, amber_count: 0, red_count: 0, mapping_confidence: 0, rule_version: 'MAXIMO-MMS-KEYWORD-v1', error_code: '', error_message: '', source_base64: sourceBuffer.toString('base64'), results_json: '', results_csv: '' };\nreturn [{ json: { ...run, response: { run_id: runId, status: 'RECEIVED' } } }];"
       },
-      "notes": "Writes the original source and run.json before the processor starts. Configure fs in the n8n Code node allowlist.",
+      "notes": "Creates the run metadata and binary run snapshot without requiring Code-node filesystem modules.",
       "notesInFlow": true
+    },
+    {
+      "id": "create-assurance-runs-table",
+      "name": "Create Assurance Runs Table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        760,
+        300
+      ],
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "assurance_runs",
+        "columns": {
+          "column": [
+            {
+              "name": "run_id",
+              "type": "string"
+            },
+            {
+              "name": "filename",
+              "type": "string"
+            },
+            {
+              "name": "source",
+              "type": "string"
+            },
+            {
+              "name": "created_at",
+              "type": "string"
+            },
+            {
+              "name": "updated_at",
+              "type": "string"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            },
+            {
+              "name": "total_rows",
+              "type": "number"
+            },
+            {
+              "name": "eligible_count",
+              "type": "number"
+            },
+            {
+              "name": "excluded_count",
+              "type": "number"
+            },
+            {
+              "name": "green_count",
+              "type": "number"
+            },
+            {
+              "name": "yellow_count",
+              "type": "number"
+            },
+            {
+              "name": "amber_count",
+              "type": "number"
+            },
+            {
+              "name": "red_count",
+              "type": "number"
+            },
+            {
+              "name": "mapping_confidence",
+              "type": "number"
+            },
+            {
+              "name": "rule_version",
+              "type": "string"
+            },
+            {
+              "name": "detected_sheet",
+              "type": "string"
+            },
+            {
+              "name": "detected_header_row",
+              "type": "number"
+            },
+            {
+              "name": "error_code",
+              "type": "string"
+            },
+            {
+              "name": "error_message",
+              "type": "string"
+            },
+            {
+              "name": "source_base64",
+              "type": "string"
+            },
+            {
+              "name": "results_json",
+              "type": "string"
+            },
+            {
+              "name": "results_csv",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      }
+    },
+    {
+      "id": "restore-run-before-insert",
+      "name": "Restore Run Before Insert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        300
+      ],
+      "parameters": {
+        "jsCode": "return [{json: $('Validate and Create Run').first().json}];"
+      }
+    },
+    {
+      "id": "insert-received-run",
+      "name": "Insert Received Run",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1280,
+        300
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "assurance_runs"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "run_id": "={{ $json.run_id ?? '' }}",
+            "filename": "={{ $json.filename ?? '' }}",
+            "source": "={{ $json.source ?? '' }}",
+            "created_at": "={{ $json.created_at ?? '' }}",
+            "updated_at": "={{ $json.updated_at ?? '' }}",
+            "status": "={{ $json.status ?? '' }}",
+            "total_rows": "={{ $json.total_rows ?? '' }}",
+            "eligible_count": "={{ $json.eligible_count ?? '' }}",
+            "excluded_count": "={{ $json.excluded_count ?? '' }}",
+            "green_count": "={{ $json.green_count ?? '' }}",
+            "yellow_count": "={{ $json.yellow_count ?? '' }}",
+            "amber_count": "={{ $json.amber_count ?? '' }}",
+            "red_count": "={{ $json.red_count ?? '' }}",
+            "mapping_confidence": "={{ $json.mapping_confidence ?? '' }}",
+            "rule_version": "={{ $json.rule_version ?? '' }}",
+            "detected_sheet": "={{ $json.detected_sheet ?? '' }}",
+            "detected_header_row": "={{ $json.detected_header_row ?? '' }}",
+            "error_code": "={{ $json.error_code ?? '' }}",
+            "error_message": "={{ $json.error_message ?? '' }}",
+            "source_base64": "={{ $json.source_base64 ?? '' }}",
+            "results_json": "={{ $json.results_json ?? '' }}",
+            "results_csv": "={{ $json.results_csv ?? '' }}"
+          },
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "filename",
+              "displayName": "filename",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "total_rows",
+              "displayName": "total_rows",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "eligible_count",
+              "displayName": "eligible_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "excluded_count",
+              "displayName": "excluded_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "green_count",
+              "displayName": "green_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "yellow_count",
+              "displayName": "yellow_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "amber_count",
+              "displayName": "amber_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "red_count",
+              "displayName": "red_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "mapping_confidence",
+              "displayName": "mapping_confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "rule_version",
+              "displayName": "rule_version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "detected_sheet",
+              "displayName": "detected_sheet",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "detected_header_row",
+              "displayName": "detected_header_row",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "error_code",
+              "displayName": "error_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "error_message",
+              "displayName": "error_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "source_base64",
+              "displayName": "source_base64",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "results_json",
+              "displayName": "results_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "results_csv",
+              "displayName": "results_csv",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "restore-run-context",
+      "name": "Restore Run Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        300
+      ],
+      "parameters": {
+        "jsCode": "return [{json: $('Validate and Create Run').first().json}];"
+      }
     },
     {
       "id": "respond-with-run-id",
@@ -42,7 +426,7 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
       "position": [
-        760,
+        1760,
         220
       ],
       "parameters": {
@@ -57,17 +441,17 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1,
       "position": [
-        760,
+        1760,
         400
       ],
       "parameters": {
-        "workflowId": "REPLACE_WITH_MAXIMO_MMS_PROCESSOR_WORKFLOW_ID",
+        "workflowId": "MeFf5cXkyftHlmrW",
         "mode": "onceForAllItems",
         "options": {
           "waitForSubWorkflow": false
         }
       },
-      "notes": "After importing both workflows, replace the placeholder workflow ID with the processor workflow ID.",
+      "notes": "The processor workflow ID is injected by RKH_PROCESSOR_WORKFLOW_ID during live installation.",
       "notesInFlow": true
     }
   ],
@@ -76,14 +460,58 @@
       "main": [
         [
           {
-            "node": "Validate, Persist, and Create Run",
+            "node": "Validate and Create Run",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Validate, Persist, and Create Run": {
+    "Validate and Create Run": {
+      "main": [
+        [
+          {
+            "node": "Create Assurance Runs Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Assurance Runs Table": {
+      "main": [
+        [
+          {
+            "node": "Restore Run Before Insert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Run Before Insert": {
+      "main": [
+        [
+          {
+            "node": "Insert Received Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Received Run": {
+      "main": [
+        [
+          {
+            "node": "Restore Run Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Run Context": {
       "main": [
         [
           {

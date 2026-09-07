@@ -12,25 +12,179 @@
       ],
       "parameters": {
         "httpMethod": "GET",
-        "path": "rkh-api-get-results",
+        "path": "rkh-v2-api-get-results",
         "responseMode": "lastNode",
         "options": {}
-      }
+      },
+      "webhookId": "5d502add-c917-4a7d-81de-99eb547e767d"
     },
     {
-      "id": "read-persistent-assurance-data",
-      "name": "Read Persistent Assurance Data",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "ensure-assurance-runs-table",
+      "name": "Ensure Assurance Runs Table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
       "position": [
         520,
         300
       ],
       "parameters": {
-        "jsCode": "const fs = require('fs'); const path = require('path');\nconst runId = String($json.query?.run_id || $json.run_id || '').replace(/[^A-Za-z0-9_-]/g, ''); if (!runId) throw new Error('RUN_ID_REQUIRED');\nconst root = path.join(process.env.RKH_ASSURANCE_DATA_DIR || path.join(process.cwd(), 'rkh-assurance-data'), 'runs', runId, 'results.json'); if (!fs.existsSync(root)) throw new Error('RESULTS_NOT_FOUND');\nreturn [{ json: JSON.parse(fs.readFileSync(root, 'utf8')) }];"
-      },
-      "notes": "Reads only the configured persistent RKH_ASSURANCE_DATA_DIR. Never exposes raw filesystem paths to the browser.",
-      "notesInFlow": true
+        "resource": "table",
+        "operation": "create",
+        "tableName": "assurance_runs",
+        "columns": {
+          "column": [
+            {
+              "name": "run_id",
+              "type": "string"
+            },
+            {
+              "name": "filename",
+              "type": "string"
+            },
+            {
+              "name": "source",
+              "type": "string"
+            },
+            {
+              "name": "created_at",
+              "type": "string"
+            },
+            {
+              "name": "updated_at",
+              "type": "string"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            },
+            {
+              "name": "total_rows",
+              "type": "number"
+            },
+            {
+              "name": "eligible_count",
+              "type": "number"
+            },
+            {
+              "name": "excluded_count",
+              "type": "number"
+            },
+            {
+              "name": "green_count",
+              "type": "number"
+            },
+            {
+              "name": "yellow_count",
+              "type": "number"
+            },
+            {
+              "name": "amber_count",
+              "type": "number"
+            },
+            {
+              "name": "red_count",
+              "type": "number"
+            },
+            {
+              "name": "mapping_confidence",
+              "type": "number"
+            },
+            {
+              "name": "rule_version",
+              "type": "string"
+            },
+            {
+              "name": "detected_sheet",
+              "type": "string"
+            },
+            {
+              "name": "detected_header_row",
+              "type": "number"
+            },
+            {
+              "name": "error_code",
+              "type": "string"
+            },
+            {
+              "name": "error_message",
+              "type": "string"
+            },
+            {
+              "name": "source_base64",
+              "type": "string"
+            },
+            {
+              "name": "results_json",
+              "type": "string"
+            },
+            {
+              "name": "results_csv",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      }
+    },
+    {
+      "id": "prepare-results-lookup",
+      "name": "Prepare Results Lookup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const incoming = $('Get Results Webhook').first().json; const runId = String(incoming.query?.run_id || incoming.run_id || '').replace(/[^A-Za-z0-9_-]/g, ''); if (!runId) throw new Error('RUN_ID_REQUIRED'); return [{json: {run_id: runId}}];"
+      }
+    },
+    {
+      "id": "get-assurance-results-row",
+      "name": "Get Assurance Results Row",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1040,
+        300
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "assurance_runs"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "run_id",
+              "condition": "eq",
+              "keyValue": "={{$json.run_id}}"
+            }
+          ]
+        },
+        "returnAll": false,
+        "limit": 1,
+        "orderBy": false
+      }
+    },
+    {
+      "id": "serialize-public-response",
+      "name": "Serialize Public Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const PUBLIC_RUN_FIELDS = [\n  'run_id', 'filename', 'source', 'created_at', 'updated_at', 'status',\n  'total_rows', 'eligible_count', 'excluded_count', 'green_count',\n  'yellow_count', 'amber_count', 'red_count', 'mapping_confidence',\n  'rule_version', 'detected_sheet', 'detected_header_row', 'error_code',\n  'error_message',\n];\n\nconst INTERNAL_PATH_FIELDS = new Set(['source_path', 'results_json_path', 'results_csv_path']);\n\nfunction serializePublicRun(run = {}) {\n  return Object.fromEntries(PUBLIC_RUN_FIELDS\n    .filter((field) => Object.prototype.hasOwnProperty.call(run, field))\n    .map((field) => [field, run[field]]));\n}\n\nfunction serializePublicResult(result = {}) {\n  return Object.fromEntries(Object.entries(result)\n    .filter(([field]) => !INTERNAL_PATH_FIELDS.has(field)));\n}\n\nconst row = $input.first()?.json;\nif (!row) throw new Error('RESULTS_NOT_FOUND');\nconst payload = JSON.parse(row.results_json || '{}');\nreturn [{json: {run: serializePublicRun(payload.run || row), mapping: payload.mapping || {}, results: (payload.results || []).map(serializePublicResult)}}];"
+      }
     }
   ],
   "connections": {
@@ -38,7 +192,40 @@
       "main": [
         [
           {
-            "node": "Read Persistent Assurance Data",
+            "node": "Ensure Assurance Runs Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Assurance Runs Table": {
+      "main": [
+        [
+          {
+            "node": "Prepare Results Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Results Lookup": {
+      "main": [
+        [
+          {
+            "node": "Get Assurance Results Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Assurance Results Row": {
+      "main": [
+        [
+          {
+            "node": "Serialize Public Response",
             "type": "main",
             "index": 0
           }
