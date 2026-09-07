@@ -28,7 +28,7 @@ npm test
 npm run build:n8n
 ```
 
-The M0 parity test reads the local handoff's expected-results JSON when it exists at `/Users/et/Downloads/RKH_Execution_Assurance_Codex_Handoff`, or at the path in `RKH_HANDOFF_DIR`. It validates all 23 GOLDEN and 4 PROVISIONAL fixtures. The 14 DECISION fixtures remain intentionally unresolved.
+The M0 parity test reads the local handoff's expected-results JSON from the path in `RKH_HANDOFF_DIR` when set, or from a sibling `RKH_Execution_Assurance_Codex_Handoff` directory. It validates all 23 GOLDEN and 4 PROVISIONAL fixtures. The 14 DECISION fixtures remain intentionally unresolved.
 
 ## GitHub Pages
 

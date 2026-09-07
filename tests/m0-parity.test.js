@@ -3,7 +3,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const engine = require('../engine/assurance-engine');
 
-const handoff = process.env.RKH_HANDOFF_DIR || '/Users/et/Downloads/RKH_Execution_Assurance_Codex_Handoff';
+const handoff = process.env.RKH_HANDOFF_DIR || path.resolve(process.cwd(), '..', 'RKH_Execution_Assurance_Codex_Handoff');
 const expectedPath = path.join(handoff, '03_M0_RULE_FREEZE', 'RKH_M0_Expected_Results.json');
 if (!fs.existsSync(expectedPath)) {
   console.log('M0 parity skipped: set RKH_HANDOFF_DIR to the local handoff bundle to run it.');
