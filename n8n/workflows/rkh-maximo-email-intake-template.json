@@ -16,7 +16,7 @@
         "responseMode": "lastNode",
         "options": {}
       },
-      "notes": "Template trigger: replace with Microsoft Outlook Trigger or Email Trigger (IMAP) after credentials and sender/subject policy are approved. Input must contain binary data and subject/from JSON fields.",
+      "notes": "Replace only after RKH IT approves the Outlook/Exchange credential and mailbox policy.",
       "notesInFlow": true,
       "webhookId": "60bb57c1-de7c-4517-8135-d1d68fe68d4a"
     },
@@ -26,11 +26,27 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        520,
+        500,
         300
       ],
       "parameters": {
-        "jsCode": "const item = $input.first();\nif (!String(item.json.subject || '').toLowerCase().includes('maximo')) throw new Error('EMAIL_SUBJECT_NOT_ALLOWED');\nconst binary = item.binary && item.binary.data;\nif (!binary) throw new Error('UPLOAD_BINARY_MISSING');\nconst filename = String(binary.fileName || item.json.body?.filename || 'upload').split(/[\\/]/).pop();\nconst extension = filename.toLowerCase().split('.').pop();\nif (!['csv', 'xlsx', 'xls'].includes(extension)) throw new Error('UNSUPPORTED_FILE_TYPE');\nconst sourceBuffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst maxBytes = 25000000;\nif (sourceBuffer.length > maxBytes) throw new Error('UPLOAD_TOO_LARGE');\nconst now = new Date();\nconst day = now.toISOString().slice(0, 10).replaceAll('-', '');\nconst stamp = day + '-' + now.toISOString().slice(11, 19).replaceAll(':', '');\nconst runId = 'RKH-' + day + '-' + stamp + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();\nconst run = { run_id: runId, filename, source: 'EMAIL', created_at: now.toISOString(), updated_at: now.toISOString(), status: 'RECEIVED', total_rows: 0, eligible_count: 0, excluded_count: 0, green_count: 0, yellow_count: 0, amber_count: 0, red_count: 0, mapping_confidence: 0, rule_version: 'MAXIMO-MMS-KEYWORD-v1', error_code: '', error_message: '', source_base64: sourceBuffer.toString('base64'), results_json: '', results_csv: '' };\nreturn [{ json: { ...run, response: { run_id: runId, status: 'RECEIVED' } } }];"
+        "jsCode": "const item = $input.first();\nif (!String(item.json.subject || '').toLowerCase().includes('maximo')) throw new Error('EMAIL_SUBJECT_NOT_ALLOWED');\nconst binary = item.binary?.data;\nif (!binary) throw new Error('UPLOAD_BINARY_MISSING');\nconst filename = String(binary.fileName || item.json.body?.filename || 'upload').split(/[\\/]/).pop();\nconst extension = filename.toLowerCase().split('.').pop();\nif (!['csv', 'xlsx', 'xls'].includes(extension)) throw new Error('UNSUPPORTED_FILE_TYPE');\nconst sourceBuffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nif (sourceBuffer.length > 25000000) throw new Error('UPLOAD_TOO_LARGE');\nconst fs = require('fs'); const crypto = require('crypto');\nconst now = new Date(); const day = now.toISOString().slice(0, 10).replaceAll('-', ''); const stamp = now.toISOString().slice(11, 19).replaceAll(':', '');\nconst run_id = 'RKH-' + day + '-' + stamp + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();\nconst runRoot = \"C:/RKH/ExecutionAssurance\" + '/runs/' + run_id; fs.mkdirSync(runRoot, { recursive: true });\nconst intake_path = String(item.json.path || '');\nconst run = { run_id, filename, source: 'EMAIL', created_at: now.toISOString(), updated_at: now.toISOString(), retention_due_at: new Date(now.getTime() + 90 * 86400000).toISOString(), status: 'RECEIVED', total_rows: 0, eligible_count: 0, excluded_count: 0, green_count: 0, yellow_count: 0, amber_count: 0, red_count: 0, mapping_confidence: 0, rule_version: 'MAXIMO-MMS-KEYWORD-v1', error_code: '', error_message: '', source_sha256: crypto.createHash('sha256').update(sourceBuffer).digest('hex'), source_bytes: sourceBuffer.length, source_path: runRoot + '/source.' + extension, results_json_path: runRoot + '/results.json', results_csv_path: runRoot + '/results.csv' };\nreturn [{ json: { ...run, intake_path, response: { run_id, status: 'RECEIVED' } }, binary: { data: binary } }];"
+      }
+    },
+    {
+      "id": "persist-source-file",
+      "name": "Persist Source File",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        740,
+        300
+      ],
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{$json.source_path}}",
+        "dataPropertyName": "data",
+        "options": {}
       }
     },
     {
@@ -39,7 +55,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        780,
+        980,
         300
       ],
       "parameters": {
@@ -66,6 +82,10 @@
             },
             {
               "name": "updated_at",
+              "type": "string"
+            },
+            {
+              "name": "retention_due_at",
               "type": "string"
             },
             {
@@ -125,15 +145,23 @@
               "type": "string"
             },
             {
-              "name": "source_base64",
+              "name": "source_sha256",
               "type": "string"
             },
             {
-              "name": "results_json",
+              "name": "source_bytes",
+              "type": "number"
+            },
+            {
+              "name": "source_path",
               "type": "string"
             },
             {
-              "name": "results_csv",
+              "name": "results_json_path",
+              "type": "string"
+            },
+            {
+              "name": "results_csv_path",
               "type": "string"
             }
           ]
@@ -144,12 +172,27 @@
       }
     },
     {
+      "id": "restore-email-for-insert",
+      "name": "Restore Email for Insert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "jsCode": "return [{json: $('Validate Email and Create Run').first().json}];"
+      },
+      "notes": "Restores the request/run context after table setup, whose output is table metadata.",
+      "notesInFlow": true
+    },
+    {
       "id": "insert-email-run",
       "name": "Insert Email Run",
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        1020,
+        1220,
         300
       ],
       "parameters": {
@@ -168,6 +211,7 @@
             "source": "={{ $json.source ?? '' }}",
             "created_at": "={{ $json.created_at ?? '' }}",
             "updated_at": "={{ $json.updated_at ?? '' }}",
+            "retention_due_at": "={{ $json.retention_due_at ?? '' }}",
             "status": "={{ $json.status ?? '' }}",
             "total_rows": "={{ $json.total_rows ?? '' }}",
             "eligible_count": "={{ $json.eligible_count ?? '' }}",
@@ -182,9 +226,11 @@
             "detected_header_row": "={{ $json.detected_header_row ?? '' }}",
             "error_code": "={{ $json.error_code ?? '' }}",
             "error_message": "={{ $json.error_message ?? '' }}",
-            "source_base64": "={{ $json.source_base64 ?? '' }}",
-            "results_json": "={{ $json.results_json ?? '' }}",
-            "results_csv": "={{ $json.results_csv ?? '' }}"
+            "source_sha256": "={{ $json.source_sha256 ?? '' }}",
+            "source_bytes": "={{ $json.source_bytes ?? '' }}",
+            "source_path": "={{ $json.source_path ?? '' }}",
+            "results_json_path": "={{ $json.results_json_path ?? '' }}",
+            "results_csv_path": "={{ $json.results_csv_path ?? '' }}"
           },
           "schema": [
             {
@@ -226,6 +272,15 @@
             {
               "id": "updated_at",
               "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "retention_due_at",
+              "displayName": "retention_due_at",
               "required": false,
               "defaultMatch": false,
               "display": true,
@@ -359,8 +414,8 @@
               "canBeUsedToMatch": false
             },
             {
-              "id": "source_base64",
-              "displayName": "source_base64",
+              "id": "source_sha256",
+              "displayName": "source_sha256",
               "required": false,
               "defaultMatch": false,
               "display": true,
@@ -368,8 +423,17 @@
               "canBeUsedToMatch": false
             },
             {
-              "id": "results_json",
-              "displayName": "results_json",
+              "id": "source_bytes",
+              "displayName": "source_bytes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "source_path",
+              "displayName": "source_path",
               "required": false,
               "defaultMatch": false,
               "display": true,
@@ -377,8 +441,17 @@
               "canBeUsedToMatch": false
             },
             {
-              "id": "results_csv",
-              "displayName": "results_csv",
+              "id": "results_json_path",
+              "displayName": "results_json_path",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "results_csv_path",
+              "displayName": "results_csv_path",
               "required": false,
               "defaultMatch": false,
               "display": true,
@@ -396,7 +469,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1260,
+        1460,
         300
       ],
       "parameters": {
@@ -409,11 +482,11 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1,
       "position": [
-        1500,
+        1700,
         300
       ],
       "parameters": {
-        "workflowId": "RV8aZQS9aH3Ah5dJ",
+        "workflowId": "A2I0dH8XPmHH6qmS",
         "mode": "onceForAllItems",
         "options": {
           "waitForSubWorkflow": false
@@ -437,6 +510,17 @@
       "main": [
         [
           {
+            "node": "Persist Source File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Source File": {
+      "main": [
+        [
+          {
             "node": "Ensure Assurance Runs Table",
             "type": "main",
             "index": 0
@@ -445,6 +529,17 @@
       ]
     },
     "Ensure Assurance Runs Table": {
+      "main": [
+        [
+          {
+            "node": "Restore Email for Insert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Email for Insert": {
       "main": [
         [
           {

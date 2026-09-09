@@ -1,26 +1,52 @@
 {
-  "name": "RKH - Dashboard Upload API",
+  "name": "RKH - Local File Drop Intake",
   "nodes": [
     {
-      "id": "dashboard-upload-webhook",
-      "name": "Dashboard Upload Webhook",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
+      "id": "watch-rkh-intake-folder",
+      "name": "Watch RKH Intake Folder",
+      "type": "n8n-nodes-base.localFileTrigger",
+      "typeVersion": 1,
       "position": [
         260,
         300
       ],
       "parameters": {
-        "httpMethod": "POST",
-        "path": "rkh-v2-dashboard-upload",
-        "responseMode": "responseNode",
+        "triggerOn": "folder",
+        "path": "C:/RKH/ExecutionAssurance/inbox",
+        "events": [
+          "add"
+        ],
         "options": {
-          "rawBody": false
+          "awaitWriteFinish": true,
+          "followSymlinks": false,
+          "ignoreInitial": true,
+          "depth": 0,
+          "usePolling": false,
+          "ignored": "",
+          "ignoreMode": "match"
         }
       },
-      "notes": "Internal reverse proxy only; accepts multipart field data.",
-      "notesInFlow": true,
-      "webhookId": "722323ba-43d8-4b09-8875-b4e40139cb29"
+      "notes": "Inactive template. Watch only the protected local inbox; activate after pilot validation.",
+      "notesInFlow": true
+    },
+    {
+      "id": "read-intake-file",
+      "name": "Read Intake File",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "={{$json.path}}",
+        "options": {
+          "dataPropertyName": "data"
+        }
+      },
+      "notes": "Reads a newly added intake file after its write completes.",
+      "notesInFlow": true
     },
     {
       "id": "validate-and-create-run",
@@ -28,38 +54,35 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        500,
-        300
-      ],
-      "parameters": {
-        "jsCode": "const item = $input.first();\nconst binary = item.binary?.data;\nif (!binary) throw new Error('UPLOAD_BINARY_MISSING');\nconst filename = String(binary.fileName || item.json.body?.filename || 'upload').split(/[\\/]/).pop();\nconst extension = filename.toLowerCase().split('.').pop();\nif (!['csv', 'xlsx', 'xls'].includes(extension)) throw new Error('UNSUPPORTED_FILE_TYPE');\nconst sourceBuffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nif (sourceBuffer.length > 25000000) throw new Error('UPLOAD_TOO_LARGE');\nconst fs = require('fs'); const crypto = require('crypto');\nconst now = new Date(); const day = now.toISOString().slice(0, 10).replaceAll('-', ''); const stamp = now.toISOString().slice(11, 19).replaceAll(':', '');\nconst run_id = 'RKH-' + day + '-' + stamp + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();\nconst runRoot = \"C:/RKH/ExecutionAssurance\" + '/runs/' + run_id; fs.mkdirSync(runRoot, { recursive: true });\nconst intake_path = String(item.json.path || '');\nconst run = { run_id, filename, source: 'DASHBOARD_UPLOAD', created_at: now.toISOString(), updated_at: now.toISOString(), retention_due_at: new Date(now.getTime() + 90 * 86400000).toISOString(), status: 'RECEIVED', total_rows: 0, eligible_count: 0, excluded_count: 0, green_count: 0, yellow_count: 0, amber_count: 0, red_count: 0, mapping_confidence: 0, rule_version: 'MAXIMO-MMS-KEYWORD-v1', error_code: '', error_message: '', source_sha256: crypto.createHash('sha256').update(sourceBuffer).digest('hex'), source_bytes: sourceBuffer.length, source_path: runRoot + '/source.' + extension, results_json_path: runRoot + '/results.json', results_csv_path: runRoot + '/results.csv' };\nreturn [{ json: { ...run, intake_path, response: { run_id, status: 'RECEIVED' } }, binary: { data: binary } }];"
-      }
-    },
-    {
-      "id": "persist-source-file",
-      "name": "Persist Source File",
-      "type": "n8n-nodes-base.readWriteFile",
-      "typeVersion": 1.1,
-      "position": [
         740,
         300
       ],
       "parameters": {
-        "operation": "write",
-        "fileName": "={{$json.source_path}}",
-        "dataPropertyName": "data",
-        "options": {}
+        "jsCode": "const item = $input.first();\nconst binary = item.binary?.data;\nif (!binary) throw new Error('UPLOAD_BINARY_MISSING');\nconst filename = String(binary.fileName || item.json.body?.filename || 'upload').split(/[\\/]/).pop();\nconst extension = filename.toLowerCase().split('.').pop();\nif (!['csv', 'xlsx', 'xls'].includes(extension)) throw new Error('UNSUPPORTED_FILE_TYPE');\nconst sourceBuffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nif (sourceBuffer.length > 25000000) throw new Error('UPLOAD_TOO_LARGE');\nconst fs = require('fs'); const crypto = require('crypto');\nconst now = new Date(); const day = now.toISOString().slice(0, 10).replaceAll('-', ''); const stamp = now.toISOString().slice(11, 19).replaceAll(':', '');\nconst run_id = 'RKH-' + day + '-' + stamp + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();\nconst runRoot = \"C:/RKH/ExecutionAssurance\" + '/runs/' + run_id; fs.mkdirSync(runRoot, { recursive: true });\nconst intake_path = String(item.json.path || '');\nconst run = { run_id, filename, source: 'FILE_DROP', created_at: now.toISOString(), updated_at: now.toISOString(), retention_due_at: new Date(now.getTime() + 90 * 86400000).toISOString(), status: 'RECEIVED', total_rows: 0, eligible_count: 0, excluded_count: 0, green_count: 0, yellow_count: 0, amber_count: 0, red_count: 0, mapping_confidence: 0, rule_version: 'MAXIMO-MMS-KEYWORD-v1', error_code: '', error_message: '', source_sha256: crypto.createHash('sha256').update(sourceBuffer).digest('hex'), source_bytes: sourceBuffer.length, source_path: runRoot + '/source.' + extension, results_json_path: runRoot + '/results.json', results_csv_path: runRoot + '/results.csv' };\nreturn [{ json: { ...run, intake_path, response: { run_id, status: 'RECEIVED' } }, binary: { data: binary } }];"
+      }
+    },
+    {
+      "id": "move-intake-file-to-run",
+      "name": "Move Intake File to Run",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const fs = require('fs'); const run = $input.first().json; if (!run.intake_path) throw new Error('INTAKE_PATH_MISSING'); fs.renameSync(run.intake_path, run.source_path); return [{json: run}];"
       },
-      "notes": "Original document is written to protected local storage, never a Data Table.",
+      "notes": "Moves the validated inbox file into its run folder; it is not copied or retained in the inbox.",
       "notesInFlow": true
     },
     {
-      "id": "create-assurance-runs-table",
-      "name": "Create Assurance Runs Table",
+      "id": "ensure-assurance-runs-table",
+      "name": "Ensure Assurance Runs Table",
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        980,
+        1220,
         300
       ],
       "parameters": {
@@ -176,12 +199,12 @@
       }
     },
     {
-      "id": "restore-run-for-insert",
-      "name": "Restore Run for Insert",
+      "id": "restore-file-drop-for-insert",
+      "name": "Restore File Drop for Insert",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1100,
+        1340,
         300
       ],
       "parameters": {
@@ -191,12 +214,12 @@
       "notesInFlow": true
     },
     {
-      "id": "insert-received-run",
-      "name": "Insert Received Run",
+      "id": "insert-file-drop-run",
+      "name": "Insert File Drop Run",
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        1220,
+        1460,
         300
       ],
       "parameters": {
@@ -468,31 +491,16 @@
       }
     },
     {
-      "id": "restore-run-context",
-      "name": "Restore Run Context",
+      "id": "restore-file-drop-context",
+      "name": "Restore File Drop Context",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1460,
+        1700,
         300
       ],
       "parameters": {
         "jsCode": "return [{json: $('Validate and Create Run').first().json}];"
-      }
-    },
-    {
-      "id": "respond-with-run-id",
-      "name": "Respond with Run ID",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
-      "position": [
-        1700,
-        220
-      ],
-      "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ JSON.stringify($json.response) }}",
-        "options": {}
       }
     },
     {
@@ -501,8 +509,8 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1,
       "position": [
-        1700,
-        400
+        1940,
+        300
       ],
       "parameters": {
         "workflowId": "A2I0dH8XPmHH6qmS",
@@ -514,7 +522,18 @@
     }
   ],
   "connections": {
-    "Dashboard Upload Webhook": {
+    "Watch RKH Intake Folder": {
+      "main": [
+        [
+          {
+            "node": "Read Intake File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Intake File": {
       "main": [
         [
           {
@@ -529,65 +548,60 @@
       "main": [
         [
           {
-            "node": "Persist Source File",
+            "node": "Move Intake File to Run",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Persist Source File": {
+    "Move Intake File to Run": {
       "main": [
         [
           {
-            "node": "Create Assurance Runs Table",
+            "node": "Ensure Assurance Runs Table",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Create Assurance Runs Table": {
+    "Ensure Assurance Runs Table": {
       "main": [
         [
           {
-            "node": "Restore Run for Insert",
+            "node": "Restore File Drop for Insert",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Restore Run for Insert": {
+    "Restore File Drop for Insert": {
       "main": [
         [
           {
-            "node": "Insert Received Run",
+            "node": "Insert File Drop Run",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Insert Received Run": {
+    "Insert File Drop Run": {
       "main": [
         [
           {
-            "node": "Restore Run Context",
+            "node": "Restore File Drop Context",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Restore Run Context": {
+    "Restore File Drop Context": {
       "main": [
         [
-          {
-            "node": "Respond with Run ID",
-            "type": "main",
-            "index": 0
-          },
           {
             "node": "Start MAXIMO MMS Processor",
             "type": "main",
@@ -601,7 +615,7 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "rkh-rkh-dashboard-upload-api",
+  "versionId": "rkh-rkh-local-file-drop-intake",
   "meta": {
     "templateCredsSetupCompleted": false
   },

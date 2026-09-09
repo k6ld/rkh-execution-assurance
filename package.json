@@ -5,6 +5,8 @@
   "description": "Deterministic MAXIMO/MMS execution assurance dashboard and n8n workflow generator",
   "scripts": {
     "test": "node tests/engine.test.js && node tests/public-api.test.js && node tests/m0-parity.test.js",
-    "build:n8n": "node scripts/build-n8n-workflows.js"
+    "build:n8n": "node scripts/build-n8n-workflows.js",
+    "serve:pilot": "node scripts/serve-local-pilot.js",
+    "test:on-prem": "node tests/on-prem-artifacts.test.js"
   }
 }

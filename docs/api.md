@@ -1,41 +1,32 @@
-# API contract
+# Same-origin dashboard API
 
-The frontend calls only n8n webhooks. The exact public URL is deployment-specific; the development paths are configured in `frontend/config.js`.
+The browser calls only same-origin internal `/api` paths. The localhost pilot
+maps these paths with `scripts/serve-local-pilot.js`; production maps the same
+paths at the approved internal reverse proxy. Browser code never calls n8n,
+the VPS, or GitHub directly.
+
+| Browser route | Method | Local n8n webhook |
+| --- | --- | --- |
+| `/api/runs` | `POST` | `/webhook/rkh-v2-dashboard-upload` |
+| `/api/runs` | `GET` | `/webhook/rkh-v2-api-list-runs` |
+| `/api/run?run_id=...` | `GET` | `/webhook/rkh-v2-api-get-run` |
+| `/api/results?run_id=...` | `GET` | `/webhook/rkh-v2-api-get-results` |
 
 ## Upload
 
-`POST /webhook/rkh-dashboard-upload`
-
-Content type: `multipart/form-data`; binary form field: `data`.
-
+`POST /api/runs` accepts `multipart/form-data` with binary field `data`.
 Successful response:
 
 ```json
-{ "run_id": "RKH-20260907-...", "status": "RECEIVED" }
+{ "run_id": "RKH-20260909-...", "status": "RECEIVED" }
 ```
 
-The upload workflow persists the original file before returning and starts the processor as a sub-workflow.
+Accepted files are CSV, XLS, or XLSX up to 25 MB. The workflow persists the
+source on the protected local filesystem before returning a run ID.
 
-## List runs
+## Read responses
 
-`GET /webhook/rkh-api-list-runs`
-
-Returns newest-first run metadata:
-
-```json
-{ "runs": [{ "run_id": "...", "filename": "...", "status": "COMPLETED", "green_count": 1, "yellow_count": 0, "amber_count": 0, "red_count": 0 }] }
-```
-
-## Get a run
-
-`GET /webhook/rkh-api-get-run?run_id=...`
-
-Returns `{ "run": { ... } }`. Run IDs are sanitized server-side before filesystem lookup.
-
-## Get results
-
-`GET /webhook/rkh-api-get-results?run_id=...`
-
-Returns `{ "run": { ... }, "mapping": { ... }, "results": [ ... ] }`.
-
-Each result retains source evidence and audit fields including `wo_number`, `work_type`, `status`, source dates/references, original problem, original worklog, `keyword_hits`, `matched_rule_ids`, `grade`, `category`, `action`, `rule_version` at run level, `policy_status`, `reasons`, `warnings`, and `manual_review`.
+List Runs returns safe run metadata. Get Run returns one safe run projection.
+Get Results returns the safe run projection, detected mapping, and row results.
+Internal source/result filesystem paths, raw Base64, and n8n credentials are
+never present in browser responses.

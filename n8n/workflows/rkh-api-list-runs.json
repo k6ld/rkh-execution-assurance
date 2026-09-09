@@ -54,6 +54,10 @@
               "type": "string"
             },
             {
+              "name": "retention_due_at",
+              "type": "string"
+            },
+            {
               "name": "status",
               "type": "string"
             },
@@ -110,15 +114,23 @@
               "type": "string"
             },
             {
-              "name": "source_base64",
+              "name": "source_sha256",
               "type": "string"
             },
             {
-              "name": "results_json",
+              "name": "source_bytes",
+              "type": "number"
+            },
+            {
+              "name": "source_path",
               "type": "string"
             },
             {
-              "name": "results_csv",
+              "name": "results_json_path",
+              "type": "string"
+            },
+            {
+              "name": "results_csv_path",
               "type": "string"
             }
           ]
@@ -129,13 +141,60 @@
       }
     },
     {
+      "id": "restore-list-request",
+      "name": "Restore List Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "jsCode": "return [{json: $('List Runs Webhook').first().json}];"
+      },
+      "notes": "Restores the request/run context after table setup, whose output is table metadata.",
+      "notesInFlow": true
+    },
+    {
+      "id": "remove-empty-legacy-runs",
+      "name": "Remove Empty Legacy Runs",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        220
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "assurance_runs"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "run_id",
+              "condition": "eq",
+              "keyValue": ""
+            }
+          ]
+        },
+        "options": {}
+      },
+      "notes": "Removes only the empty test row created by an earlier pilot table-setup defect.",
+      "notesInFlow": true
+    },
+    {
       "id": "get-assurance-runs",
       "name": "Get Assurance Runs",
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
         780,
-        300
+        380
       ],
       "parameters": {
         "resource": "row",
@@ -162,10 +221,10 @@
       "typeVersion": 2,
       "position": [
         1040,
-        300
+        380
       ],
       "parameters": {
-        "jsCode": "const PUBLIC_RUN_FIELDS = [\n  'run_id', 'filename', 'source', 'created_at', 'updated_at', 'status',\n  'total_rows', 'eligible_count', 'excluded_count', 'green_count',\n  'yellow_count', 'amber_count', 'red_count', 'mapping_confidence',\n  'rule_version', 'detected_sheet', 'detected_header_row', 'error_code',\n  'error_message',\n];\n\nconst INTERNAL_PATH_FIELDS = new Set(['source_path', 'results_json_path', 'results_csv_path']);\n\nfunction serializePublicRun(run = {}) {\n  return Object.fromEntries(PUBLIC_RUN_FIELDS\n    .filter((field) => Object.prototype.hasOwnProperty.call(run, field))\n    .map((field) => [field, run[field]]));\n}\n\nfunction serializePublicResult(result = {}) {\n  return Object.fromEntries(Object.entries(result)\n    .filter(([field]) => !INTERNAL_PATH_FIELDS.has(field)));\n}\n\nconst runs = $input.all().map(item => serializePublicRun(item.json)).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));\nreturn [{json: {runs}}];"
+        "jsCode": "const PUBLIC_RUN_FIELDS = [\n  'run_id', 'filename', 'source', 'created_at', 'updated_at', 'status',\n  'total_rows', 'eligible_count', 'excluded_count', 'green_count',\n  'yellow_count', 'amber_count', 'red_count', 'mapping_confidence',\n  'rule_version', 'detected_sheet', 'detected_header_row', 'error_code',\n  'error_message',\n];\n\nconst INTERNAL_PATH_FIELDS = new Set(['source_path', 'results_json_path', 'results_csv_path']);\n\nfunction serializePublicRun(run = {}) {\n  return Object.fromEntries(PUBLIC_RUN_FIELDS\n    .filter((field) => Object.prototype.hasOwnProperty.call(run, field))\n    .map((field) => [field, run[field]]));\n}\n\nfunction serializePublicResult(result = {}) {\n  return Object.fromEntries(Object.entries(result)\n    .filter(([field]) => !INTERNAL_PATH_FIELDS.has(field)));\n}\n\nconst runs = $input.all().filter(item => item.json?.run_id).map(item => serializePublicRun(item.json)).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))); return [{json: {runs}}];"
       }
     }
   ],
@@ -184,6 +243,22 @@
     "Ensure Assurance Runs Table": {
       "main": [
         [
+          {
+            "node": "Restore List Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore List Request": {
+      "main": [
+        [
+          {
+            "node": "Remove Empty Legacy Runs",
+            "type": "main",
+            "index": 0
+          },
           {
             "node": "Get Assurance Runs",
             "type": "main",

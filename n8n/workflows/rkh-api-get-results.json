@@ -54,6 +54,10 @@
               "type": "string"
             },
             {
+              "name": "retention_due_at",
+              "type": "string"
+            },
+            {
               "name": "status",
               "type": "string"
             },
@@ -110,15 +114,23 @@
               "type": "string"
             },
             {
-              "name": "source_base64",
+              "name": "source_sha256",
               "type": "string"
             },
             {
-              "name": "results_json",
+              "name": "source_bytes",
+              "type": "number"
+            },
+            {
+              "name": "source_path",
               "type": "string"
             },
             {
-              "name": "results_csv",
+              "name": "results_json_path",
+              "type": "string"
+            },
+            {
+              "name": "results_csv_path",
               "type": "string"
             }
           ]
@@ -127,6 +139,21 @@
           "createIfNotExists": true
         }
       }
+    },
+    {
+      "id": "restore-results-request",
+      "name": "Restore Results Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "jsCode": "return [{json: $('Get Results Webhook').first().json}];"
+      },
+      "notes": "Restores the request/run context after table setup, whose output is table metadata.",
+      "notesInFlow": true
     },
     {
       "id": "prepare-results-lookup",
@@ -138,12 +165,12 @@
         300
       ],
       "parameters": {
-        "jsCode": "const incoming = $('Get Results Webhook').first().json; const runId = String(incoming.query?.run_id || incoming.run_id || '').replace(/[^A-Za-z0-9_-]/g, ''); if (!runId) throw new Error('RUN_ID_REQUIRED'); return [{json: {run_id: runId}}];"
+        "jsCode": "const incoming = $('Get Results Webhook').first().json; const run_id = String(incoming.query?.run_id || incoming.run_id || '').replace(/[^A-Za-z0-9_-]/g, ''); if (!run_id) throw new Error('RUN_ID_REQUIRED'); return [{json: {run_id}}];"
       }
     },
     {
-      "id": "get-assurance-results-row",
-      "name": "Get Assurance Results Row",
+      "id": "get-results-row",
+      "name": "Get Results Row",
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
@@ -174,8 +201,8 @@
       }
     },
     {
-      "id": "serialize-public-response",
-      "name": "Serialize Public Response",
+      "id": "prepare-result-artifact",
+      "name": "Prepare Result Artifact",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -183,7 +210,37 @@
         300
       ],
       "parameters": {
-        "jsCode": "const PUBLIC_RUN_FIELDS = [\n  'run_id', 'filename', 'source', 'created_at', 'updated_at', 'status',\n  'total_rows', 'eligible_count', 'excluded_count', 'green_count',\n  'yellow_count', 'amber_count', 'red_count', 'mapping_confidence',\n  'rule_version', 'detected_sheet', 'detected_header_row', 'error_code',\n  'error_message',\n];\n\nconst INTERNAL_PATH_FIELDS = new Set(['source_path', 'results_json_path', 'results_csv_path']);\n\nfunction serializePublicRun(run = {}) {\n  return Object.fromEntries(PUBLIC_RUN_FIELDS\n    .filter((field) => Object.prototype.hasOwnProperty.call(run, field))\n    .map((field) => [field, run[field]]));\n}\n\nfunction serializePublicResult(result = {}) {\n  return Object.fromEntries(Object.entries(result)\n    .filter(([field]) => !INTERNAL_PATH_FIELDS.has(field)));\n}\n\nconst row = $input.first()?.json;\nif (!row) throw new Error('RESULTS_NOT_FOUND');\nconst payload = JSON.parse(row.results_json || '{}');\nreturn [{json: {run: serializePublicRun(payload.run || row), mapping: payload.mapping || {}, results: (payload.results || []).map(serializePublicResult)}}];"
+        "jsCode": "const row = $input.first()?.json; if (!row?.results_json_path) throw new Error('RESULTS_NOT_FOUND'); return [{json: row}];"
+      }
+    },
+    {
+      "id": "read-results-json",
+      "name": "Read Results JSON",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        1520,
+        300
+      ],
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "={{$json.results_json_path}}",
+        "options": {
+          "dataPropertyName": "data"
+        }
+      }
+    },
+    {
+      "id": "serialize-public-response",
+      "name": "Serialize Public Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const PUBLIC_RUN_FIELDS = [\n  'run_id', 'filename', 'source', 'created_at', 'updated_at', 'status',\n  'total_rows', 'eligible_count', 'excluded_count', 'green_count',\n  'yellow_count', 'amber_count', 'red_count', 'mapping_confidence',\n  'rule_version', 'detected_sheet', 'detected_header_row', 'error_code',\n  'error_message',\n];\n\nconst INTERNAL_PATH_FIELDS = new Set(['source_path', 'results_json_path', 'results_csv_path']);\n\nfunction serializePublicRun(run = {}) {\n  return Object.fromEntries(PUBLIC_RUN_FIELDS\n    .filter((field) => Object.prototype.hasOwnProperty.call(run, field))\n    .map((field) => [field, run[field]]));\n}\n\nfunction serializePublicResult(result = {}) {\n  return Object.fromEntries(Object.entries(result)\n    .filter(([field]) => !INTERNAL_PATH_FIELDS.has(field)));\n}\n\nconst row = $('Prepare Result Artifact').first()?.json; if (!row || !$input.first()?.binary?.data) throw new Error('RESULTS_NOT_FOUND'); const payload = JSON.parse((await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8')); return [{json: {run: serializePublicRun(payload.run || row), mapping: payload.mapping || {}, results: (payload.results || []).map(serializePublicResult)}}];"
       }
     }
   ],
@@ -203,6 +260,17 @@
       "main": [
         [
           {
+            "node": "Restore Results Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Results Request": {
+      "main": [
+        [
+          {
             "node": "Prepare Results Lookup",
             "type": "main",
             "index": 0
@@ -214,14 +282,36 @@
       "main": [
         [
           {
-            "node": "Get Assurance Results Row",
+            "node": "Get Results Row",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Get Assurance Results Row": {
+    "Get Results Row": {
+      "main": [
+        [
+          {
+            "node": "Prepare Result Artifact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Result Artifact": {
+      "main": [
+        [
+          {
+            "node": "Read Results JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Results JSON": {
       "main": [
         [
           {

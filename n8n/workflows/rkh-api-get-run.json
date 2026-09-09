@@ -54,6 +54,10 @@
               "type": "string"
             },
             {
+              "name": "retention_due_at",
+              "type": "string"
+            },
+            {
               "name": "status",
               "type": "string"
             },
@@ -110,15 +114,23 @@
               "type": "string"
             },
             {
-              "name": "source_base64",
+              "name": "source_sha256",
               "type": "string"
             },
             {
-              "name": "results_json",
+              "name": "source_bytes",
+              "type": "number"
+            },
+            {
+              "name": "source_path",
               "type": "string"
             },
             {
-              "name": "results_csv",
+              "name": "results_json_path",
+              "type": "string"
+            },
+            {
+              "name": "results_csv_path",
               "type": "string"
             }
           ]
@@ -127,6 +139,21 @@
           "createIfNotExists": true
         }
       }
+    },
+    {
+      "id": "restore-run-request",
+      "name": "Restore Run Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "jsCode": "return [{json: $('Get Run Webhook').first().json}];"
+      },
+      "notes": "Restores the request/run context after table setup, whose output is table metadata.",
+      "notesInFlow": true
     },
     {
       "id": "prepare-run-lookup",
@@ -138,7 +165,7 @@
         300
       ],
       "parameters": {
-        "jsCode": "const incoming = $('Get Run Webhook').first().json; const runId = String(incoming.query?.run_id || incoming.run_id || '').replace(/[^A-Za-z0-9_-]/g, ''); if (!runId) throw new Error('RUN_ID_REQUIRED'); return [{json: {run_id: runId}}];"
+        "jsCode": "const incoming = $('Get Run Webhook').first().json; const run_id = String(incoming.query?.run_id || incoming.run_id || '').replace(/[^A-Za-z0-9_-]/g, ''); if (!run_id) throw new Error('RUN_ID_REQUIRED'); return [{json: {run_id}}];"
       }
     },
     {
@@ -183,7 +210,7 @@
         300
       ],
       "parameters": {
-        "jsCode": "const PUBLIC_RUN_FIELDS = [\n  'run_id', 'filename', 'source', 'created_at', 'updated_at', 'status',\n  'total_rows', 'eligible_count', 'excluded_count', 'green_count',\n  'yellow_count', 'amber_count', 'red_count', 'mapping_confidence',\n  'rule_version', 'detected_sheet', 'detected_header_row', 'error_code',\n  'error_message',\n];\n\nconst INTERNAL_PATH_FIELDS = new Set(['source_path', 'results_json_path', 'results_csv_path']);\n\nfunction serializePublicRun(run = {}) {\n  return Object.fromEntries(PUBLIC_RUN_FIELDS\n    .filter((field) => Object.prototype.hasOwnProperty.call(run, field))\n    .map((field) => [field, run[field]]));\n}\n\nfunction serializePublicResult(result = {}) {\n  return Object.fromEntries(Object.entries(result)\n    .filter(([field]) => !INTERNAL_PATH_FIELDS.has(field)));\n}\n\nconst row = $input.first()?.json;\nif (!row) throw new Error('RUN_NOT_FOUND');\nreturn [{json: {run: serializePublicRun(row)}}];"
+        "jsCode": "const PUBLIC_RUN_FIELDS = [\n  'run_id', 'filename', 'source', 'created_at', 'updated_at', 'status',\n  'total_rows', 'eligible_count', 'excluded_count', 'green_count',\n  'yellow_count', 'amber_count', 'red_count', 'mapping_confidence',\n  'rule_version', 'detected_sheet', 'detected_header_row', 'error_code',\n  'error_message',\n];\n\nconst INTERNAL_PATH_FIELDS = new Set(['source_path', 'results_json_path', 'results_csv_path']);\n\nfunction serializePublicRun(run = {}) {\n  return Object.fromEntries(PUBLIC_RUN_FIELDS\n    .filter((field) => Object.prototype.hasOwnProperty.call(run, field))\n    .map((field) => [field, run[field]]));\n}\n\nfunction serializePublicResult(result = {}) {\n  return Object.fromEntries(Object.entries(result)\n    .filter(([field]) => !INTERNAL_PATH_FIELDS.has(field)));\n}\n\nconst row = $input.first()?.json; if (!row) throw new Error('RUN_NOT_FOUND'); return [{json: {run: serializePublicRun(row)}}];"
       }
     }
   ],
@@ -200,6 +227,17 @@
       ]
     },
     "Ensure Assurance Runs Table": {
+      "main": [
+        [
+          {
+            "node": "Restore Run Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Run Request": {
       "main": [
         [
           {

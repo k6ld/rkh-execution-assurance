@@ -1,43 +1,47 @@
-# n8n setup and manual import
+# Local n8n workflow setup
 
-The JSON files in `n8n/workflows/` are the requested manual-import artifacts. They were generated locally from the tested engine; n8n was not available in this environment, so their execution still needs to be proven on the target instance.
-
-## Runtime prerequisites
-
-The workflows use the native n8n Data Table node for durable run metadata, source payload retention, and results JSON/CSV. This avoids requiring `fs`, `$env`, or an externally allowed `xlsx` package inside the Code node.
-
-```text
-RKH_MAX_UPLOAD_BYTES=25000000
-```
-
-The `assurance_runs` table is created with `createIfNotExists` and scoped to the existing n8n project. Do not put backend settings or credentials in the GitHub Pages frontend.
+These artifacts are for an RKH-local n8n instance. They must not be imported
+into the superseded VPS for RKH work.
 
 ## Import order
 
-1. Import `rkh-maximo-mms-processor.json` and note its workflow ID.
-2. Import `rkh-dashboard-upload-api.json` with the processor ID injected by `RKH_PROCESSOR_WORKFLOW_ID` when the generator runs.
-4. Import `rkh-api-list-runs.json`, `rkh-api-get-run.json`, and `rkh-api-get-results.json`.
-5. Import `rkh-maximo-email-intake-template.json`, replace its processor ID, and keep it inactive until the Outlook/IMAP trigger and business filtering are configured.
+1. Run `npm run build:n8n`.
+2. Import `rkh-maximo-mms-processor.json` inactive and record its local ID.
+3. Rebuild with `RKH_PROCESSOR_WORKFLOW_ID` set to that ID, then import the dashboard upload and three read-API workflows inactive.
+4. Import `rkh-local-file-drop-intake-template.json` only after the local storage folders exist. Keep it inactive until synthetic validation is complete.
+5. Import `rkh-maximo-email-intake-template.json` only after RKH approves the mailbox integration. Replace its webhook template with the approved Outlook/Exchange trigger; keep it inactive until tested.
 
-The frontend paths in `frontend/config.js` match the webhook paths in these files.
+Do not activate a workflow or use a real RKH report as an import test without
+the corresponding authorization.
 
-## What the processor does
+## Persistent data
 
-The processor receives a run payload, writes `PREPARING`, reconstructs the uploaded source from the Data Table payload, extracts CSV/XLSX rows through the native Extract From File node, writes `ANALYZING`, maps the MAXIMO/MMS fields, runs the deterministic engine, and upserts the final `COMPLETED` snapshot. The Data Table stores the results JSON and exportable CSV string.
+The Data Table is `assurance_runs`. It contains only run lifecycle metadata,
+counts, retention timestamp, and internal file references. The source report,
+results JSON, and export CSV are protected local files under the configured
+artifact root. Public response workflows never expose the file references.
 
-## Data Table choice
+The local root defaults to `C:/RKH/ExecutionAssurance` at generation time. To
+use an approved different local volume, set `RKH_ASSURANCE_STORAGE_ROOT` only
+when running `npm run build:n8n`; do not commit a machine-specific path or any
+runtime data.
 
-This build uses `assurance_runs` as the durable metadata and result store. The table is created through a temporary setup workflow using the native Data Table node, then reused by the upload/processor/read APIs. The public APIs expose only the safe projection and never return `source_base64` or `results_json` directly.
+Set the n8n service's `N8N_RESTRICT_FILE_ACCESS_TO` to that same root and
+restart n8n before activating these workflows. n8n v2 blocks native file nodes
+outside its allowlist by design. For the workstation pilot also set
+`N8N_LISTEN_ADDRESS=127.0.0.1` and verify the actual listener; production uses
+the same loopback setting behind the internal reverse proxy.
 
-## Test sequence on the target n8n instance
+## Target validation
 
-Use a synthetic CSV first:
+Use the supplied synthetic CSV only. Verify that:
 
-1. Call the upload webhook with the sample report.
-2. Verify the response contains a `run_id`.
-3. Confirm the `assurance_runs` row contains the source payload, status, counts, results JSON, and results CSV fields.
-4. Poll the Get Run webhook until `COMPLETED`.
-5. Fetch Get Results and compare counts/results with the local engine tests.
-6. Restart n8n and repeat the Get Run/Get Results calls.
+1. Upload returns a run ID and writes one source artifact.
+2. The Data Table row has path metadata but no Base64 source or result payload columns.
+3. The processor writes local JSON and CSV result artifacts and reaches `COMPLETED`.
+4. Get Run and Get Results return the expected public shape without internal paths.
+5. Restart persistence works, and the 90-day cleanup utility is dry-run only.
 
-Do not call the system production-ready until this sequence and the Golden fixture parity have passed in the actual n8n instance.
+Before shared production, also verify loopback-only n8n binding, internal HTTPS
+proxy behavior, AD/group authentication, backup restore, execution-data
+pruning, and RKH-approved mailbox/file-drop controls.

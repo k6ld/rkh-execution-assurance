@@ -1,10 +1,13 @@
 window.RKH_CONFIG = window.RKH_CONFIG || {
-  apiBaseUrl: 'https://n8n-coolify.barqai.app',
+  // The production reverse proxy and the localhost pilot both serve the UI and
+  // API from one internal origin. Never put an n8n URL, credential, or secret
+  // in this public browser configuration.
+  apiBaseUrl: window.location.origin,
   endpoints: {
-    upload: '/webhook/rkh-v2-dashboard-upload',
-    listRuns: '/webhook/rkh-v2-api-list-runs',
-    getRun: '/webhook/rkh-v2-api-get-run',
-    getResults: '/webhook/rkh-v2-api-get-results'
+    upload: '/api/runs',
+    listRuns: '/api/runs',
+    getRun: '/api/run',
+    getResults: '/api/results'
   },
   pollMs: 1500,
   pollTimeoutMs: 10 * 60 * 1000
